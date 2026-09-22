@@ -7,6 +7,8 @@ Jupyter. The same analysis lives in ``eda.py``; this just wires the prints.
 
 from __future__ import annotations
 
+import os
+
 import eda
 
 
@@ -40,6 +42,25 @@ def main() -> None:
 
     print("\nFull correlation matrix:")
     print(eda.correlation_matrix(df).to_string())
+
+    out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plots")
+    paths = eda.plot_distributions(df, out_dir=out_dir)
+    print(f"\nWrote {len(paths)} boxplot comparison figures to {out_dir}/")
+
+    result = eda.train_baseline(df)
+    cm = result["confusion_matrix"]
+    print(
+        f"\nLogisticRegression baseline: ROC-AUC {result['auc']:.3f} "
+        f"(train {result['train_n']} / validation {result['test_n']})"
+    )
+    print("Validation confusion matrix:")
+    print(f"  TN {cm[0,0]:4d}  FP {cm[0,1]:4d}")
+    print(f"  FN {cm[1,0]:4d}  TP {cm[1,1]:4d}")
+
+    print("\nFeature coefficients (sorted by |coef|; exp_coef = odds ratio):")
+    table = eda.coefficient_table(result)
+    for row in table.itertuples(index=False):
+        print(f"  {row.feature:28s} coef={row.coef:+.3f}  odds_ratio={row.exp_coef:.3f}")
 
 
 if __name__ == "__main__":
