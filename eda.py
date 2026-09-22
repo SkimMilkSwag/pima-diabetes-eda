@@ -202,6 +202,83 @@ def top_correlates_with_outcome(df: pd.DataFrame, k: int = 5) -> pd.Series:
     return corr.abs().sort_values(ascending=False).head(k)
 
 
+def train_baseline(
+    df: pd.DataFrame,
+    test_size: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """Fit a LogisticRegression baseline and evaluate it on a held-out split.
+
+    ``df`` is expected to be post-``coerce_zeros``: NaNs are imputed with the
+    column median before the split so that train and validation see the same
+    feature space (imputing per-split would leak group-level information).
+    The 768 rows are small, so a single stratified shuffle is used instead of
+    nested cross-validation; the seed keeps results reproducible.
+
+    Returns a dict with:
+
+    - ``model`` — the fitted ``LogisticRegression`` (for coefficient
+      inspection downstream),
+    - ``train_n`` / ``test_n`` — split sizes,
+    - ``auc`` — ROC-AUC on the validation set,
+    - ``confusion_matrix`` — 2x2 array for the validation predictions.
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import confusion_matrix, roc_auc_score
+
+    work = df.copy()
+    for col in FEATURES:
+        work[col] = work[col].fillna(work[col].median())
+    X = work[FEATURES].to_numpy(dtype=float)
+    y = work["Outcome"].to_numpy()
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(y))
+    n_test = int(round(test_size * len(y)))
+    # stratified split: keep the ~35% positive rate in both halves so the
+    # validation set isn't skewed by chance
+    test_idx = []
+    for val in sorted(np.unique(y)):
+        idx = perm[y[perm] == val]
+        k = int(round(test_size * len(idx)))
+        test_idx.extend(idx[:k].tolist())
+    test_set = set(test_idx)
+    train_idx = [i for i in perm if i not in test_set]
+
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X[train_idx], y[train_idx])
+
+    proba = model.predict_proba(X[test_idx])[:, 1]
+    preds = (proba >= 0.5).astype(int)
+    return {
+        "model": model,
+        "train_n": len(train_idx),
+        "test_n": len(test_idx),
+        "auc": float(roc_auc_score(y[test_idx], proba)),
+        "confusion_matrix": confusion_matrix(y[test_idx], preds),
+    }
+
+
+def coefficient_table(result: dict) -> pd.DataFrame:
+    """Per-feature coefficients from a fitted baseline model.
+
+    Columns: ``feature``, ``coef`` (signed log-odds), ``exp_coef`` (the odds
+    ratio, i.e. how the odds of Outcome=1 scale per one-unit increase in the
+    feature). Rows are sorted by |coef| descending — a quick, interpretable
+    feature-importance proxy without a second model.
+    """
+    model = result["model"]
+    coefs = np.asarray(model.coef_).ravel()
+    out = pd.DataFrame(
+        {
+            "feature": FEATURES,
+            "coef": coefs,
+            "exp_coef": np.exp(coefs),
+        }
+    )
+    return out.reindex(out["coef"].abs().sort_values(ascending=False).index)
+
+
 def describe(df: pd.DataFrame) -> pd.DataFrame:
     """Convenience wrapper: the standard pandas describe for all features."""
     return df[FEATURES].describe().T.round(3)

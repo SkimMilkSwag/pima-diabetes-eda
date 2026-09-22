@@ -123,3 +123,39 @@ def test_plot_distributions_writes_pngs(tmp_path):
     assert {"all_features.png"} | {f"{f}.png" for f in eda.FEATURES} == names
     for p in paths:
         assert os.path.getsize(p) > 0
+
+
+def _prepared():
+    raw = _load()
+    df, _ = eda.coerce_zeros(raw)
+    return df
+
+
+def test_train_baseline_splits_and_scores():
+    df = _prepared()
+    res = eda.train_baseline(df)
+    assert res["train_n"] + res["test_n"] == 768
+    assert 0.5 < res["auc"] < 0.95, "baseline AUC should be informative but not perfect"
+    cm = res["confusion_matrix"]
+    assert cm.shape == (2, 2)
+    # predictions must be meaningful: correct calls outnumber wrong ones
+    assert cm[0, 0] + cm[1, 1] > cm[0, 1] + cm[1, 0]
+
+
+def test_train_baseline_is_reproducible():
+    df = _prepared()
+    a = eda.train_baseline(df)
+    b = eda.train_baseline(df)
+    assert a["auc"] == b["auc"]
+    np.testing.assert_array_equal(a["confusion_matrix"], b["confusion_matrix"])
+
+
+def test_coefficient_table_sorted_and_complete():
+    df = _prepared()
+    table = eda.coefficient_table(eda.train_baseline(df))
+    assert list(table.columns) == ["feature", "coef", "exp_coef"]
+    assert set(table["feature"]) == set(eda.FEATURES)
+    abs_coefs = table["coef"].abs().tolist()
+    assert abs_coefs == sorted(abs_coefs, reverse=True)
+    # odds ratios are positive and consistent with the signed coefficients
+    np.testing.assert_allclose(table["exp_coef"], np.exp(table["coef"]))
