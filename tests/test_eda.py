@@ -94,3 +94,32 @@ def test_describe():
     d = eda.describe(df)
     assert set(d.columns).issuperset({"mean", "std", "min", "max"})
     assert list(d.index) == eda.FEATURES
+
+
+def test_group_distributions_shape_and_order():
+    df = _load()
+    dists = eda.group_distributions(df)
+    assert len(dists) == len(eda.FEATURES)
+    for rows in dists:
+        # index 0 = outcome 0, index 1 = outcome 1; quantile points per group
+        assert len(rows) == 2
+        for row in rows:
+            assert len(row) <= 100
+            # quantiles of real data are monotonically non-decreasing
+            assert (np.diff(row) >= -1e-12).all()
+
+
+def test_group_distributions_glucose_separates():
+    df = _load()
+    glu = eda.group_distributions(df)[eda.FEATURES.index("Glucose")]
+    # the positive group's glucose distribution sits above the negative one
+    assert glu[1].mean() > glu[0].mean()
+
+
+def test_plot_distributions_writes_pngs(tmp_path):
+    df = _load()
+    paths = eda.plot_distributions(df, out_dir=str(tmp_path))
+    names = {os.path.basename(p) for p in paths}
+    assert {"all_features.png"} | {f"{f}.png" for f in eda.FEATURES} == names
+    for p in paths:
+        assert os.path.getsize(p) > 0

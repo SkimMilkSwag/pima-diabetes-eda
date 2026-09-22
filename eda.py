@@ -123,6 +123,69 @@ def feature_means_by_outcome(df: pd.DataFrame) -> pd.DataFrame:
     return out.round(3)
 
 
+def group_distributions(df: pd.DataFrame) -> list[list[np.ndarray]]:
+    """Per-feature distributions across the two outcome groups.
+
+    Returns a list of eight entries (one per feature, in ``FEATURES`` order),
+    each a two-element list of arrays — the 100-quantile points that bracket
+    the data for the negative and positive groups respectively (index 0 =
+    Outcome 0, index 1 = Outcome 1). Each entry is ready to feed straight
+    into ``matplotlib.pyplot.boxplot``.
+    """
+    out: list[list[np.ndarray]] = []
+    for feat in FEATURES:
+        rows = []
+        for val in sorted(df["Outcome"].unique()):
+            vals = df.loc[df["Outcome"] == val, feat].dropna()
+            rows.append(np.unique(np.quantile(vals, np.linspace(0, 1, 100))))
+        out.append(rows)
+    return out
+
+
+def plot_distributions(df: pd.DataFrame, out_dir: str = "plots") -> list[str]:
+    """Render a boxplot comparison of every feature across outcome groups.
+
+    Writes one PNG per feature (``out_dir/<feature>.png``) plus an 8-panel
+    grid at ``out_dir/all_features.png``. Returns the written file paths.
+    The Agg backend is used so the function works headless (CI, run.py).
+    """
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    os.makedirs(out_dir, exist_ok=True)
+    paths: list[str] = []
+    data = group_distributions(df)
+    for feat, values in zip(FEATURES, data):
+        fig, ax = plt.subplots(figsize=(6, 4))
+        bp = ax.boxplot(values)
+        ax.set_xticks([1, 2])
+        ax.set_xticklabels(["Outcome 0", "Outcome 1"])
+        ax.set_title(feat)
+        ax.set_ylabel(feat)
+        for element in ("boxes", "whiskers", "caps"):
+            plt.setp(bp[element], linewidth=1)
+        path = os.path.join(out_dir, f"{feat}.png")
+        fig.savefig(path, dpi=100)
+        plt.close(fig)
+        paths.append(path)
+
+    fig, axes = plt.subplots(4, 2, figsize=(11, 16))
+    for ax, feat, values in zip(axes.ravel(), FEATURES, data):
+        bp = ax.boxplot(values)
+        ax.set_xticks([1, 2])
+        ax.set_xticklabels(["Outcome 0", "Outcome 1"])
+        ax.set_title(feat)
+        plt.setp(bp["boxes"], linewidth=1)
+    fig.tight_layout()
+    path = os.path.join(out_dir, "all_features.png")
+    fig.savefig(path, dpi=100)
+    plt.close(fig)
+    paths.append(path)
+    return paths
+
+
 def correlation_matrix(df: pd.DataFrame) -> pd.DataFrame:
     """Pearson correlation among the features (and Outcome), NaN-tolerant."""
     cols = FEATURES + ["Outcome"]
