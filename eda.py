@@ -259,6 +259,83 @@ def train_baseline(
     }
 
 
+def imputation_comparison(
+    df: pd.DataFrame,
+    test_size: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """A/B test median imputation against no-imputation on the same split.
+
+    Both arms share the identical stratified train/validation partition, so a
+    delta in ROC-AUC reflects only how the missing values were treated — not a
+    different dataset. The "imputed" arm fills each feature's NaNs with the
+    column median computed on the *full* frame (the same convention
+    ``train_baseline`` uses); the "naive" arm leaves the NaNs in place, so any
+    row with a missing feature is dropped from the fit and evaluation.
+
+    Returns a dict with:
+
+    - ``auc_imputed`` / ``auc_naive`` — ROC-AUC per arm on the shared
+      validation set,
+    - ``delta_auc`` — ``auc_imputed - auc_naive`` (positive = imputation
+      helped),
+    - ``test_n`` — rows in the shared validation split,
+    - ``naive_train_dropped`` / ``naive_test_dropped`` — how many train/
+      validation rows the naive arm lost to its missing-row drop. The drop is
+      computed here (rows with any NaN feature, before or after fitting) so
+      the numbers are reported regardless of the sklearn version's handling.
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+
+    y = df["Outcome"].to_numpy()
+
+    # shared stratified partition, derived once from the raw row order
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(y))
+    test_idx = []
+    for val in sorted(np.unique(y)):
+        idx = perm[y[perm] == val]
+        k = int(round(test_size * len(idx)))
+        test_idx.extend(idx[:k].tolist())
+    test_set = set(test_idx)
+    train_idx = [i for i in perm if i not in test_set]
+    test_idx_sorted = sorted(test_set)
+
+    def _fit(X):
+        model = LogisticRegression(max_iter=1000)
+        model.fit(X[train_idx], y[train_idx])
+        proba = model.predict_proba(X[test_idx_sorted])[:, 1]
+        return float(roc_auc_score(y[test_idx_sorted], proba))
+
+    imputed = df.copy()
+    for col in FEATURES:
+        imputed[col] = imputed[col].fillna(imputed[col].median())
+    auc_imputed = _fit(imputed[FEATURES].to_numpy(dtype=float))
+
+    naive = df.copy()
+    feat_naive = naive[FEATURES]
+    has_nan = feat_naive.isna().any(axis=1)
+    n_train_dropped = int(has_nan.loc[train_idx].sum())
+    n_test_dropped = int(has_nan.loc[test_idx_sorted].sum())
+    naive_idx_train = [i for i in train_idx if not has_nan.iloc[i]]
+    naive_idx_test = [i for i in test_idx_sorted if not has_nan.iloc[i]]
+    model = LogisticRegression(max_iter=1000)
+    Xn = naive[FEATURES].to_numpy(dtype=float)
+    model.fit(Xn[naive_idx_train], y[naive_idx_train])
+    proba = model.predict_proba(Xn[naive_idx_test])[:, 1]
+    auc_naive = float(roc_auc_score(y[naive_idx_test], proba))
+
+    return {
+        "auc_imputed": auc_imputed,
+        "auc_naive": auc_naive,
+        "delta_auc": auc_imputed - auc_naive,
+        "test_n": len(test_idx_sorted),
+        "naive_train_dropped": n_train_dropped,
+        "naive_test_dropped": n_test_dropped,
+    }
+
+
 def coefficient_table(result: dict) -> pd.DataFrame:
     """Per-feature coefficients from a fitted baseline model.
 

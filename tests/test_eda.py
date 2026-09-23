@@ -150,6 +150,39 @@ def test_train_baseline_is_reproducible():
     np.testing.assert_array_equal(a["confusion_matrix"], b["confusion_matrix"])
 
 
+def test_imputation_comparison_uses_shared_split():
+    df = _prepared()
+    ab = eda.imputation_comparison(df)
+    baseline = eda.train_baseline(df)
+    # the A/B arms use the same stratified partition as train_baseline,
+    # and the imputed arm should land at the same AUC as the baseline run
+    assert ab["test_n"] == baseline["test_n"]
+    assert abs(ab["auc_imputed"] - baseline["auc"]) < 1e-9
+    assert np.isclose(ab["delta_auc"], ab["auc_imputed"] - ab["auc_naive"])
+    # both arms must be informative (well above the coin-flip 0.5)
+    assert ab["auc_imputed"] > 0.6
+    assert ab["auc_naive"] > 0.5
+
+
+def test_imputation_comparison_is_reproducible():
+    df = _prepared()
+    a = eda.imputation_comparison(df)
+    b = eda.imputation_comparison(df)
+    for key in ("auc_imputed", "auc_naive", "delta_auc"):
+        assert a[key] == b[key]
+    assert a["naive_train_dropped"] == b["naive_train_dropped"]
+    assert a["naive_test_dropped"] == b["naive_test_dropped"]
+
+
+def test_imputation_comparison_reports_row_drops():
+    df = _prepared()
+    ab = eda.imputation_comparison(df)
+    # the naive arm must drop rows (Insulin is ~49% missing after coercion)
+    assert ab["naive_train_dropped"] > 0
+    assert ab["naive_test_dropped"] > 0
+    assert ab["test_n"] == round(0.3 * 768)
+
+
 def test_coefficient_table_sorted_and_complete():
     df = _prepared()
     table = eda.coefficient_table(eda.train_baseline(df))

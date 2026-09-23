@@ -62,6 +62,15 @@ def main() -> None:
     for row in table.itertuples(index=False):
         print(f"  {row.feature:28s} coef={row.coef:+.3f}  odds_ratio={row.exp_coef:.3f}")
 
+    ab = eda.imputation_comparison(df)
+    verdict = "imputation helps" if ab["delta_auc"] >= 0 else "imputation hurts"
+    print(
+        f"\nImputation A/B (median vs. no imputation, shared split of {ab['test_n']} validation rows): "
+        f"imputed ROC-AUC {ab['auc_imputed']:.3f} vs. naive {ab['auc_naive']:.3f} "
+        f"(delta {ab['delta_auc']:+.3f}; the naive arm drops "
+        f"{ab['naive_train_dropped']} train / {ab['naive_test_dropped']} validation rows) — {verdict}"
+    )
+
 
 if __name__ == "__main__":
     main()
