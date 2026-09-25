@@ -142,13 +142,22 @@ def group_distributions(df: pd.DataFrame) -> list[list[np.ndarray]]:
     return out
 
 
-def plot_distributions(df: pd.DataFrame, out_dir: str = "plots") -> list[str]:
+def plot_distributions(
+    df: pd.DataFrame, out_dir: str = "plots", skip: bool = False
+) -> list[str]:
     """Render a boxplot comparison of every feature across outcome groups.
 
     Writes one PNG per feature (``out_dir/<feature>.png``) plus an 8-panel
     grid at ``out_dir/all_features.png``. Returns the written file paths.
     The Agg backend is used so the function works headless (CI, run.py).
+
+    Pass ``skip=True`` in CI or on a headless machine without display: figure
+    generation is elided and an empty list is returned, which keeps the test
+    suite from depending on matplotlib at all (it's a plotting-only concern).
     """
+    if skip:
+        return []
+
     import matplotlib
 
     matplotlib.use("Agg")

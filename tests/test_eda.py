@@ -125,6 +125,13 @@ def test_plot_distributions_writes_pngs(tmp_path):
         assert os.path.getsize(p) > 0
 
 
+def test_plot_distributions_skip_writes_nothing(tmp_path):
+    df = _load()
+    paths = eda.plot_distributions(df, out_dir=str(tmp_path), skip=True)
+    assert paths == []
+    assert os.listdir(str(tmp_path)) == [], "skip must not write any figure files"
+
+
 def _prepared():
     raw = _load()
     df, _ = eda.coerce_zeros(raw)
