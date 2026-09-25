@@ -25,6 +25,10 @@ def main() -> None:
     print("\nMissingness report (post-coercion):")
     print(eda.missing_report(df).to_string(index=False))
 
+    # skip figure rendering in CI: matplotlib is a plotting-only concern and
+    # its render cost dominates the run time with no analysis value there
+    ci = os.environ.get("CI", "").strip() not in ("", "0")
+
     oc = eda.outcome_counts(raw)
     print(
         f"\nOutcome: {oc['outcome_1']} positive / {oc['outcome_0']} negative "
@@ -44,8 +48,11 @@ def main() -> None:
     print(eda.correlation_matrix(df).to_string())
 
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plots")
-    paths = eda.plot_distributions(df, out_dir=out_dir)
-    print(f"\nWrote {len(paths)} boxplot comparison figures to {out_dir}/")
+    paths = eda.plot_distributions(df, out_dir=out_dir, skip=ci)
+    if ci:
+        print("\nSkipped boxplot figure rendering (CI mode).")
+    else:
+        print(f"\nWrote {len(paths)} boxplot comparison figures to {out_dir}/")
 
     result = eda.train_baseline(df)
     cm = result["confusion_matrix"]
