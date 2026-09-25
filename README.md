@@ -33,12 +33,17 @@ Requires `pandas` and `numpy`. (scikit-learn / scipy are optional — the core
 analysis is stdlib + pandas only.)
 
 ```bash
-python -m pip install pandas numpy
+python -m pip install pandas numpy scikit-learn matplotlib
 # run headless analysis
 PYTHONPATH=. python run.py
 # run tests
 PYTHONPATH=. python -m pytest tests/ -q
 ```
+
+`run.py` detects a CI environment (the `CI` env var, set by GitHub Actions)
+and skips the boxplot figure rendering there — figures are a plotting-only
+concern and slow the run down with no analysis value in CI. Set `CI=1`
+locally to preview that path.
 
 ## What the analysis covers
 
@@ -50,6 +55,14 @@ PYTHONPATH=. python -m pytest tests/ -q
 | Per-feature means, split by outcome + delta | `feature_means_by_outcome()` |
 | Pearson correlation matrix (features + Outcome) | `correlation_matrix()` |
 | Top-k features by \|corr\| with Outcome | `top_correlates_with_outcome()` |
+| LogisticRegression baseline (ROC-AUC, confusion matrix) | `train_baseline()` |
+| Median-imputation A/B on a shared split | `imputation_comparison()` |
+| Coefficients / odds-ratio table | `coefficient_table()` |
+
+## CI
+
+GitHub Actions runs the test suite on Python 3.10/3.11/3.12 for every push
+and pull request (`.github/workflows/ci.yml`).
 
 A note on the data: the UCI export records several "not available" measurements
 as `0` (a glucose of 0 is not physically plausible). `coerce_zeros()` turns
