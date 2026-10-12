@@ -13,3 +13,6 @@ env/
 htmlcov/
 .ipynb_checkpoints/
 .DS_Store
+
+# local figure output from run.py
+plots/
