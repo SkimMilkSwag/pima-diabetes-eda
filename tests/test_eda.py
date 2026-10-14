@@ -199,3 +199,52 @@ def test_coefficient_table_sorted_and_complete():
     assert abs_coefs == sorted(abs_coefs, reverse=True)
     # odds ratios are positive and consistent with the signed coefficients
     np.testing.assert_allclose(table["exp_coef"], np.exp(table["coef"]))
+
+
+def test_train_random_forest_matches_baseline_split():
+    df = _prepared()
+    rf = eda.train_random_forest(df)
+    baseline = eda.train_baseline(df)
+    # identical shared split: same sizes, and the tree model must be at least
+    # as informative as a coin flip on the validation set
+    assert rf["train_n"] == baseline["train_n"]
+    assert rf["test_n"] == baseline["test_n"]
+    assert 0.5 < rf["auc"] < 0.95
+    importances = rf["feature_importances"]
+    assert len(importances) == len(eda.FEATURES)
+    assert (importances >= 0).all()
+    # sklearn normalizes feature_importances_ to sum to 1
+    np.testing.assert_allclose(importances.sum(), 1.0, atol=1e-6)
+
+
+def test_rf_importance_table_ranked_and_complete():
+    df = _prepared()
+    table = eda.rf_importance_table(eda.train_random_forest(df))
+    assert list(table.columns) == ["feature", "importance", "rank"]
+    assert set(table["feature"]) == set(eda.FEATURES)
+    # rows are sorted by importance descending and rank is 1..N in order
+    assert table["importance"].tolist() == sorted(
+        table["importance"].tolist(), reverse=True
+    )
+    assert list(table["rank"]) == list(range(1, len(eda.FEATURES) + 1))
+
+
+def test_rf_importance_reproducible():
+    df = _prepared()
+    a = eda.rf_importance_table(eda.train_random_forest(df))
+    b = eda.rf_importance_table(eda.train_random_forest(df))
+    pd.testing.assert_frame_equal(a, b)
+
+
+def test_plot_rf_importance_writes_png(tmp_path):
+    df = _prepared()
+    paths = eda.plot_rf_importance(df, out_dir=str(tmp_path))
+    assert len(paths) == 1 and os.path.basename(paths[0]) == "rf_importance.png"
+    assert os.path.getsize(paths[0]) > 0
+
+
+def test_plot_rf_importance_skip_writes_nothing(tmp_path):
+    df = _prepared()
+    paths = eda.plot_rf_importance(df, out_dir=str(tmp_path), skip=True)
+    assert paths == []
+    assert os.listdir(str(tmp_path)) == [], "skip must not write any figure files"

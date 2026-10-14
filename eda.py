@@ -365,6 +365,111 @@ def coefficient_table(result: dict) -> pd.DataFrame:
     return out.reindex(out["coef"].abs().sort_values(ascending=False).index)
 
 
+def train_random_forest(
+    df: pd.DataFrame,
+    test_size: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """Fit a RandomForestClassifier on the same shared split as the baseline.
+
+    Mirrors ``train_baseline``'s median imputation and stratified
+    train/validation partition exactly, so ROC-AUC differences between the
+    two models reflect only the learner — not a different dataset or a
+    different handling of missing values.
+
+    Returns a dict with:
+
+    - ``model`` — the fitted ``RandomForestClassifier``,
+    - ``train_n`` / ``test_n`` — split sizes (identical to the baseline's),
+    - ``auc`` — ROC-AUC on the validation set,
+    - ``feature_importances`` — normalized impurity-decrease importances for
+      each feature in ``FEATURES`` order.
+    """
+    from sklearn.ensemble import RandomForestClassifier
+    from sklearn.metrics import roc_auc_score
+
+    work = df.copy()
+    for col in FEATURES:
+        work[col] = work[col].fillna(work[col].median())
+    X = work[FEATURES].to_numpy(dtype=float)
+    y = work["Outcome"].to_numpy()
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(y))
+    test_idx = []
+    for val in sorted(np.unique(y)):
+        idx = perm[y[perm] == val]
+        k = int(round(test_size * len(idx)))
+        test_idx.extend(idx[:k].tolist())
+    test_set = set(test_idx)
+    train_idx = [i for i in perm if i not in test_set]
+
+    model = RandomForestClassifier(n_estimators=200, random_state=seed)
+    model.fit(X[train_idx], y[train_idx])
+    proba = model.predict_proba(X[sorted(test_set)])[:, 1]
+    return {
+        "model": model,
+        "train_n": len(train_idx),
+        "test_n": len(test_idx),
+        "auc": float(roc_auc_score(y[sorted(test_set)], proba)),
+        "feature_importances": model.feature_importances_,
+    }
+
+
+def rf_importance_table(result: dict) -> pd.DataFrame:
+    """RandomForest feature importances as a tidy table, ranked.
+
+    Columns: ``feature``, ``importance`` (normalized impurity decrease; the
+    column sums to 1), and ``rank`` (1 = most important). Rows are sorted by
+    importance descending — the tree-model counterpart of the
+    ``coefficient_table`` that ranks the LR baseline's signed coefficients.
+    """
+    importances = np.asarray(result["feature_importances"], dtype=float)
+    order = np.argsort(-importances, kind="stable")
+    out = pd.DataFrame(
+        {
+            "feature": [FEATURES[i] for i in order],
+            "importance": [float(importances[i]) for i in order],
+            "rank": range(1, len(FEATURES) + 1),
+        }
+    )
+    return out
+
+
+def plot_rf_importance(
+    df: pd.DataFrame, out_dir: str = "plots", skip: bool = False
+) -> list[str]:
+    """Render the RandomForest feature-importance bar chart.
+
+    Writes ``out_dir/rf_importance.png`` and returns its path (an empty list
+    when ``skip=True``). The Agg backend keeps the function headless-friendly,
+    matching ``plot_distributions``.
+    """
+    if skip:
+        return []
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    table = rf_importance_table(train_random_forest(df))
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.barh(
+        table["feature"][::-1],
+        table["importance"][::-1],
+        color="#4c72b0",
+    )
+    ax.set_xlabel("Importance (normalized impurity decrease)")
+    ax.set_title("RandomForest feature importances — Pima diabetes")
+    fig.tight_layout()
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "rf_importance.png")
+    fig.savefig(path, dpi=100)
+    plt.close(fig)
+    return [path]
+
+
 def describe(df: pd.DataFrame) -> pd.DataFrame:
     """Convenience wrapper: the standard pandas describe for all features."""
     return df[FEATURES].describe().T.round(3)

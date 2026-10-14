@@ -69,6 +69,20 @@ def main() -> None:
     for row in table.itertuples(index=False):
         print(f"  {row.feature:28s} coef={row.coef:+.3f}  odds_ratio={row.exp_coef:.3f}")
 
+    rf = eda.train_random_forest(df)
+    rf_table = eda.rf_importance_table(rf)
+    print(
+        f"\nRandomForest (200 trees, same shared split): ROC-AUC {rf['auc']:.3f} "
+        f"vs. logistic baseline {result['auc']:.3f}"
+    )
+    print("Feature importances (normalized impurity decrease, ranked):")
+    for row in rf_table.itertuples(index=False):
+        bar = "#" * int(round(row.importance * 40))
+        print(f"  {row.rank:2d} {row.feature:28s} {row.importance:.3f}  {bar}")
+    rf_paths = eda.plot_rf_importance(df, out_dir=out_dir, skip=ci)
+    if not ci and rf_paths:
+        print(f"Wrote RF importance chart to {rf_paths[0]}")
+
     ab = eda.imputation_comparison(df)
     verdict = "imputation helps" if ab["delta_auc"] >= 0 else "imputation hurts"
     print(
