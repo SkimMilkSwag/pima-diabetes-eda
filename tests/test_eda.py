@@ -248,3 +248,86 @@ def test_plot_rf_importance_skip_writes_nothing(tmp_path):
     paths = eda.plot_rf_importance(df, out_dir=str(tmp_path), skip=True)
     assert paths == []
     assert os.listdir(str(tmp_path)) == [], "skip must not write any figure files"
+
+
+def test_threshold_sweep_table_shape_and_bounds():
+    df = _prepared()
+    sweep = eda.threshold_sweep(df)
+    table = sweep["table"]
+    assert list(table.index) == [0.3, 0.4, 0.5, 0.6, 0.7]
+    assert list(table.columns) == ["precision", "recall", "f1", "tp", "fp", "fn", "tn"]
+    for row in table.itertuples():
+        assert 0.0 <= row.precision <= 1.0
+        assert 0.0 <= row.recall <= 1.0
+        assert 0.0 <= row.f1 <= 1.0
+        # every validation row lands in exactly one confusion-matrix bucket
+        assert row.tp + row.fp + row.fn + row.tn == 230
+    assert 0.5 < sweep["auc"] < 0.95
+
+
+def test_threshold_sweep_consistent_with_baseline_at_half():
+    df = _prepared()
+    baseline = eda.train_baseline(df)
+    sweep = eda.threshold_sweep(df)
+    # the sweep shares train_baseline's split and model, so the 0.5 row must
+    # reproduce the baseline's validation confusion matrix exactly
+    row = sweep["table"].loc[0.5]
+    cm = np.asarray(baseline["confusion_matrix"])
+    assert int(row["tp"]) == int(cm[1, 1])
+    assert int(row["fp"]) == int(cm[0, 1])
+    assert int(row["fn"]) == int(cm[1, 0])
+    assert int(row["tn"]) == int(cm[0, 0])
+    np.testing.assert_allclose(sweep["auc"], baseline["auc"], atol=1e-9)
+
+
+def test_threshold_sweep_monotone_recall_and_best_cutoff():
+    df = _prepared()
+    sweep = eda.threshold_sweep(df)
+    table = sweep["table"]
+    # a higher cutoff predicts fewer positives: recall (and TP count) drop,
+    # precision rises, as the model gets more conservative
+    assert table["recall"].is_monotonic_decreasing
+    assert table["precision"].is_monotonic_increasing
+    assert table["tp"].is_monotonic_decreasing
+    best = sweep["best_cutoff"]
+    assert best in table.index
+    np.testing.assert_allclose(
+        table["f1"].loc[best], table["f1"].max()
+    )
+    # on this dataset the F1 optimum lands at a low threshold — recall is the
+    # scarcer metric, so a loose cutoff beats 0.5; assert the sweep actually
+    # finds that instead of defaulting to 0.5
+    assert best < 0.5
+
+
+def test_threshold_sweep_custom_cutoffs():
+    df = _prepared()
+    sweep = eda.threshold_sweep(df, cutoffs=[0.1, 0.9])
+    table = sweep["table"]
+    assert list(table.index) == [0.1, 0.9]
+    # a 0.1 cutoff predicts almost everything positive: recall ~1, precision
+    # collapses to near the base rate of positives in the split
+    assert table.loc[0.1, "recall"] > 0.95
+    assert table.loc[0.9, "recall"] < table.loc[0.1, "recall"]
+
+
+def test_threshold_sweep_reproducible():
+    df = _prepared()
+    a = eda.threshold_sweep(df)
+    b = eda.threshold_sweep(df)
+    pd.testing.assert_frame_equal(a["table"], b["table"])
+    assert a["best_cutoff"] == b["best_cutoff"]
+
+
+def test_plot_threshold_sweep_writes_png(tmp_path):
+    df = _prepared()
+    paths = eda.plot_threshold_sweep(df, out_dir=str(tmp_path))
+    assert len(paths) == 1 and os.path.basename(paths[0]) == "threshold_sweep.png"
+    assert os.path.getsize(paths[0]) > 0
+
+
+def test_plot_threshold_sweep_skip_writes_nothing(tmp_path):
+    df = _prepared()
+    paths = eda.plot_threshold_sweep(df, out_dir=str(tmp_path), skip=True)
+    assert paths == []
+    assert os.listdir(str(tmp_path)) == [], "skip must not write any figure files"

@@ -92,6 +92,24 @@ def main() -> None:
         f"{ab['naive_train_dropped']} train / {ab['naive_test_dropped']} validation rows) — {verdict}"
     )
 
+    sweep = eda.threshold_sweep(df)
+    table = sweep["table"]
+    print(
+        f"\nThreshold sweep on the baseline's validation probabilities "
+        f"(ROC-AUC {sweep['auc']:.3f}):"
+    )
+    print("  cutoff  precision   recall      f1      TP   FP   FN   TN")
+    for cutoff, row in table.iterrows():
+        print(
+            f"  {cutoff:.1f}   {row['precision']:8.3f}   {row['recall']:8.3f}   "
+            f"{row['f1']:6.3f}   {int(row['tp']):4d}  {int(row['fp']):3d}  "
+            f"{int(row['fn']):3d}  {int(row['tn']):4d}"
+        )
+    print(f"  best cutoff by F1: {sweep['best_cutoff']:.1f}")
+    ts_paths = eda.plot_threshold_sweep(df, out_dir=out_dir, skip=ci)
+    if not ci and ts_paths:
+        print(f"Wrote threshold sweep chart to {ts_paths[0]}")
+
 
 if __name__ == "__main__":
     main()

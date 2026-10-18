@@ -470,6 +470,131 @@ def plot_rf_importance(
     return [path]
 
 
+def threshold_sweep(
+    df: pd.DataFrame,
+    cutoffs: tuple[float, ...] | list[float] = (0.3, 0.4, 0.5, 0.6, 0.7),
+    test_size: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """Sweep decision thresholds on the baseline model's validation probabilities.
+
+    The same LogisticRegression and the same stratified train/validation split
+    as ``train_baseline`` are refit once; each row of the returned table then
+    re-scores the *same* validation probabilities at a different cutoff, so the
+    sweep isolates the threshold choice rather than any dataset difference.
+
+    Returns a dict with:
+
+    - ``table`` — a DataFrame indexed by ``cutoff`` (ascending) with columns
+      ``precision``, ``recall``, ``f1``, ``tp``, ``fp``, ``fn``, ``tn``.
+      A cutoff of 0.5 reproduces the baseline's hard predictions exactly.
+    - ``best_cutoff`` — the cutoff maximizing F1; ties break toward the lower
+      threshold (the conservative one, which favors recall).
+    - ``auc`` — ROC-AUC of the underlying probabilities, included so callers
+      can report it next to the table without refitting.
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+
+    work = df.copy()
+    for col in FEATURES:
+        work[col] = work[col].fillna(work[col].median())
+    X = work[FEATURES].to_numpy(dtype=float)
+    y = work["Outcome"].to_numpy()
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(y))
+    test_idx = []
+    for val in sorted(np.unique(y)):
+        idx = perm[y[perm] == val]
+        k = int(round(test_size * len(idx)))
+        test_idx.extend(idx[:k].tolist())
+    test_set = set(test_idx)
+    train_idx = [i for i in perm if i not in test_set]
+
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X[train_idx], y[train_idx])
+    proba = model.predict_proba(X[sorted(test_set)])[:, 1]
+    y_true = y[sorted(test_set)]
+
+    rows = []
+    best_key = None
+    for cutoff in cutoffs:
+        preds = (proba >= cutoff).astype(int)
+        tp = int(np.sum((preds == 1) & (y_true == 1)))
+        fp = int(np.sum((preds == 1) & (y_true == 0)))
+        fn = int(np.sum((preds == 0) & (y_true == 1)))
+        tn = int(np.sum((preds == 0) & (y_true == 0)))
+        prec = precision_score(y_true, preds, zero_division=0)
+        rec = recall_score(y_true, preds, zero_division=0)
+        f1 = f1_score(y_true, preds, zero_division=0)
+        rows.append(
+            {
+                "cutoff": cutoff,
+                "precision": prec,
+                "recall": rec,
+                "f1": f1,
+                "tp": tp,
+                "fp": fp,
+                "fn": fn,
+                "tn": tn,
+            }
+        )
+        # ties on F1 break toward the lower cutoff (max over an ascending list
+        # keeps the first occurrence), which is the recall-favoring choice
+        if best_key is None or f1 > best_key[0]:
+            best_key = (f1, cutoff)
+
+    table = pd.DataFrame(rows).set_index("cutoff")
+    return {
+        "table": table,
+        "best_cutoff": float(best_key[1]),
+        "auc": float(roc_auc_score(y_true, proba)),
+    }
+
+
+def plot_threshold_sweep(
+    df: pd.DataFrame, out_dir: str = "plots", skip: bool = False
+) -> list[str]:
+    """Render the threshold sweep as a precision/recall/F1 line chart.
+
+    Writes ``out_dir/threshold_sweep.png`` and returns its path (an empty list
+    when ``skip=True``). The Agg backend keeps the function headless-friendly,
+    matching ``plot_distributions`` and ``plot_rf_importance``. The cutoff that
+    maximizes F1 is marked with a vertical line so the optimal operating point
+    reads directly off the figure.
+    """
+    if skip:
+        return []
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    sweep = threshold_sweep(df)
+    table = sweep["table"]
+    best = sweep["best_cutoff"]
+    fig, ax = plt.subplots(figsize=(8, 5))
+    for col, style in (("precision", "-o"), ("recall", "-s"), ("f1", "-^")):
+        ax.plot(table.index, table[col], style, label=col)
+    ax.axvline(best, color="#00000030", linestyle="--")
+    ax.set_xlabel("Decision threshold (predict positive if P >= cutoff)")
+    ax.set_ylabel("Score")
+    ax.set_title(
+        "Baseline LogisticRegression — precision / recall / F1 by threshold "
+        f"(best F1 at {best:.1f})"
+    )
+    ax.set_ylim(0, 1)
+    ax.legend()
+    fig.tight_layout()
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "threshold_sweep.png")
+    fig.savefig(path, dpi=100)
+    plt.close(fig)
+    return [path]
+
+
 def describe(df: pd.DataFrame) -> pd.DataFrame:
     """Convenience wrapper: the standard pandas describe for all features."""
     return df[FEATURES].describe().T.round(3)
