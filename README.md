@@ -59,6 +59,7 @@ locally to preview that path.
 | RandomForest comparison + feature importances (chart) | `train_random_forest()`, `rf_importance_table()`, `plot_rf_importance()` |
 | Median-imputation A/B on a shared split | `imputation_comparison()` |
 | Coefficients / odds-ratio table | `coefficient_table()` |
+| Decision-threshold sweep (precision/recall/F1 by cutoff) + chart | `threshold_sweep()`, `plot_threshold_sweep()` |
 
 ## CI
 
