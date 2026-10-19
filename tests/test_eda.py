@@ -331,3 +331,83 @@ def test_plot_threshold_sweep_skip_writes_nothing(tmp_path):
     paths = eda.plot_threshold_sweep(df, out_dir=str(tmp_path), skip=True)
     assert paths == []
     assert os.listdir(str(tmp_path)) == [], "skip must not write any figure files"
+
+
+def test_calibration_check_table_shape_and_totals():
+    df = _prepared()
+    cal = eda.calibration_check(df)
+    table = cal["table"]
+    # 10 deciles, all populated on the real data; the validation split has
+    # ~230 rows, so every decile carries members.
+    assert list(table.index) == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    for col in ("n", "mean_predicted", "observed_rate"):
+        assert col in table.columns
+    # every validation row lands in exactly one bin, so the bin sizes must
+    # sum to the validation split size (matches train_baseline's test_n)
+    base = eda.train_baseline(df)
+    assert int(table["n"].sum()) == base["test_n"]
+    assert (table["mean_predicted"] >= 0).all() and (table["mean_predicted"] <= 1).all()
+    assert (table["observed_rate"] >= 0).all() and (table["observed_rate"] <= 1).all()
+    # decile ordering: mean predicted probability must increase with the
+    # decile index (bin edges are monotone, so averages can't cross)
+    assert list(table["mean_predicted"]) == sorted(table["mean_predicted"])
+
+
+def test_calibration_check_auc_matches_baseline():
+    df = _prepared()
+    cal = eda.calibration_check(df)
+    base = eda.train_baseline(df)
+    # same model, same split: AUC must be identical to the baseline's
+    assert abs(cal["auc"] - base["auc"]) < 1e-9
+
+
+def test_calibration_check_slope_intercept_populated():
+    df = _prepared()
+    cal = eda.calibration_check(df)
+    assert cal["calibration_slope"] is not None
+    assert cal["intercept"] is not None
+    # logistic regression on this data is reasonably well calibrated: the fit
+    # must be positive-sloped and the intercept must stay in a sane band.
+    # (A slope near zero or a huge intercept would flag broken binning.)
+    assert cal["calibration_slope"] > 0.0
+    assert -0.5 <= cal["intercept"] <= 0.5
+
+
+def test_calibration_check_custom_n_bins():
+    df = _prepared()
+    coarse = eda.calibration_check(df, n_bins=5)
+    assert len(coarse["table"]) == 5
+    # with 5 bins each bin holds roughly twice the rows of a decile
+    deciles = eda.calibration_check(df, n_bins=10)
+    assert int(coarse["table"]["n"].sum()) == int(deciles["table"]["n"].sum())
+
+
+def test_calibration_check_n_bins_one_gives_single_bin():
+    df = _prepared()
+    single = eda.calibration_check(df, n_bins=1)
+    table = single["table"]
+    assert len(table) == 1
+    # one populated bin: slope/intercept need >= 2 points, so they're None
+    assert single["calibration_slope"] is None
+    assert single["intercept"] is None
+    # the single bin covers every validation row, so its observed rate is just
+    # the raw positive rate of that split — compare against the full frame's
+    # positive rate (stratification keeps them close but not identical).
+    raw = _load()
+    df2, _ = eda.coerce_zeros(raw)
+    expected_rate = float((df2["Outcome"] == 1).mean())
+    assert abs(table.iloc[0]["observed_rate"] - round(expected_rate, 4)) < 0.02
+
+
+def test_plot_calibration_writes_png(tmp_path):
+    df = _prepared()
+    paths = eda.plot_calibration(df, out_dir=str(tmp_path))
+    assert len(paths) == 1 and os.path.basename(paths[0]) == "calibration.png"
+    assert os.path.getsize(paths[0]) > 0
+
+
+def test_plot_calibration_skip_writes_nothing(tmp_path):
+    df = _prepared()
+    paths = eda.plot_calibration(df, out_dir=str(tmp_path), skip=True)
+    assert paths == []
+    assert os.listdir(str(tmp_path)) == [], "skip must not write any figure files"

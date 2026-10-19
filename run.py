@@ -110,6 +110,26 @@ def main() -> None:
     if not ci and ts_paths:
         print(f"Wrote threshold sweep chart to {ts_paths[0]}")
 
+    cal = eda.calibration_check(df)
+    ctable = cal["table"]
+    slope_str = f"{cal['calibration_slope']:.2f}" if cal["calibration_slope"] is not None else "n/a"
+    intercept_str = (
+        f"{cal['intercept']:+.2f}" if cal["intercept"] is not None else "n/a"
+    )
+    print(
+        f"\nCalibration check (predicted vs observed positive rate per decile, "
+        f"ROC-AUC {cal['auc']:.3f}; fit slope {slope_str}, intercept {intercept_str}):"
+    )
+    print("  decile   n   mean_predicted   observed_rate")
+    for decile, row in ctable.iterrows():
+        print(
+            f"  {int(decile):6d}  {int(row['n']):3d}   "
+            f"{row['mean_predicted']:14.3f}   {row['observed_rate']:15.3f}"
+        )
+    cal_paths = eda.plot_calibration(df, out_dir=out_dir, skip=ci)
+    if not ci and cal_paths:
+        print(f"Wrote reliability diagram to {cal_paths[0]}")
+
 
 if __name__ == "__main__":
     main()

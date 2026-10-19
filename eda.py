@@ -553,6 +553,110 @@ def threshold_sweep(
     }
 
 
+def calibration_check(
+    df: pd.DataFrame,
+    n_bins: int = 10,
+    test_size: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """Calibration check: predicted vs observed positive rate per probability decile.
+
+    The same LogisticRegression and stratified train/validation split as
+    ``train_baseline`` are refit once; the validation probabilities are then
+    binned into ``n_bins`` equal-width buckets (deciles by default) and each
+    bin reports what the model predicted versus what actually happened — the
+    classic reliability-diagram data.
+
+    Returns a dict with:
+
+    - ``table`` — a DataFrame indexed by decile (0 = lowest predicted
+      probability) with columns ``n`` (rows in the bin), ``mean_predicted``
+      (average model probability), ``observed_rate`` (actual positive rate).
+      Empty bins are dropped; on 768 rows with ~35% positives, all ten
+      deciles normally have members.
+    - ``calibration_slope`` / ``intercept`` — the fit of observed vs
+      predicted across the populated bins' bin centers. A well-calibrated
+      model sits near slope=1, intercept=0 (the 45-degree line).
+    - ``auc`` — ROC-AUC of the underlying probabilities, included so callers
+      can report discrimination next to calibration without refitting.
+
+    Notes: with ``n_bins > 10`` the bins are finer than deciles; with
+    ``n_bins == 1`` everything lands in a single bin (slope/intercept need
+    at least two populated points and come back NaN).
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+
+    work = df.copy()
+    for col in FEATURES:
+        work[col] = work[col].fillna(work[col].median())
+    X = work[FEATURES].to_numpy(dtype=float)
+    y = work["Outcome"].to_numpy()
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(y))
+    test_idx = []
+    for val in sorted(np.unique(y)):
+        idx = perm[y[perm] == val]
+        k = int(round(test_size * len(idx)))
+        test_idx.extend(idx[:k].tolist())
+    test_set = set(test_idx)
+    train_idx = [i for i in perm if i not in test_set]
+
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X[train_idx], y[train_idx])
+    proba = model.predict_proba(X[sorted(test_set)])[:, 1]
+    y_true = y[sorted(test_set)]
+
+    bins = np.linspace(0.0, 1.0, n_bins + 1)
+    # proba is 1-D; compare against the bin edges to produce a (n, n_bins)
+    # membership matrix where labels[:, i] selects the rows in bin i.
+    labels = (proba[:, None] >= bins[:-1]) & (proba[:, None] < bins[1:])
+    # probabilities exactly at 1.0 fall into the last bin
+    if n_bins > 1:
+        labels[:, -1] |= proba >= bins[-1]
+
+    rows = []
+    for i in range(n_bins):
+        mask = labels[:, i]
+        n_bin = int(mask.sum())
+        if n_bin == 0:
+            continue
+        pred = float(proba[mask].mean())
+        obs = float(y_true[mask].mean())
+        rows.append(
+            {
+                "decile": i + 1,
+                "n": n_bin,
+                "mean_predicted": round(pred, 4),
+                "observed_rate": round(obs, 4),
+            }
+        )
+
+    table = pd.DataFrame(rows).set_index("decile") if rows else pd.DataFrame(
+        columns=["n", "mean_predicted", "observed_rate"]
+    ).rename_axis("decile")
+
+    slope, intercept = float("nan"), float("nan")
+    if len(table) >= 2:
+        # least-squares fit of observed vs predicted at each bin's center —
+        # the calibration curve's linear summary (slope ~1, intercept ~0 is
+        # well calibrated)
+        x = table["mean_predicted"].to_numpy(dtype=float)
+        v = table["observed_rate"].to_numpy(dtype=float)
+        denom = float(((x - x.mean()) ** 2).sum())
+        if denom > 0:
+            slope = float(((x - x.mean()) * (v - v.mean())).sum() / denom)
+            intercept = float(v.mean() - slope * x.mean())
+
+    return {
+        "table": table,
+        "calibration_slope": round(slope, 4) if not np.isnan(slope) else None,
+        "intercept": round(intercept, 4) if not np.isnan(intercept) else None,
+        "auc": float(roc_auc_score(y_true, proba)),
+    }
+
+
 def plot_threshold_sweep(
     df: pd.DataFrame, out_dir: str = "plots", skip: bool = False
 ) -> list[str]:
@@ -590,6 +694,69 @@ def plot_threshold_sweep(
     fig.tight_layout()
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, "threshold_sweep.png")
+    fig.savefig(path, dpi=100)
+    plt.close(fig)
+    return [path]
+
+
+def plot_calibration(
+    df: pd.DataFrame, out_dir: str = "plots", skip: bool = False
+) -> list[str]:
+    """Render the calibration check as a reliability diagram.
+
+    Writes ``out_dir/calibration.png`` and returns its path (an empty list
+    when ``skip=True``). The Agg backend keeps the function headless-friendly,
+    matching the other plot helpers. Each decile is plotted at its mean
+    predicted probability against its observed rate; a 45-degree reference
+    line marks perfect calibration so mis-calibration reads directly off the
+    figure.
+    """
+    if skip:
+        return []
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    cal = calibration_check(df)
+    table = cal["table"]
+    fig, ax = plt.subplots(figsize=(7, 6))
+    ax.plot(
+        [0, 1], [0, 1], color="#888888", linestyle="--", label="perfectly calibrated"
+    )
+    ax.scatter(
+        table["mean_predicted"],
+        table["observed_rate"],
+        s=table["n"] * 3,
+        c="#4c72b0",
+        edgecolor="#1f3b57",
+        alpha=0.85,
+        label="deciles (size ~ n)",
+    )
+    if cal["calibration_slope"] is not None:
+        xs = np.linspace(0, 1, 50)
+        ys = cal["intercept"] + cal["calibration_slope"] * xs
+        ax.plot(
+            xs,
+            ys,
+            color="#c44e52",
+            linestyle=":",
+            label=f"fit (slope {cal['calibration_slope']:.2f}, intercept {cal['intercept']:+.2f})",
+        )
+    ax.set_xlabel("Mean predicted probability per decile")
+    ax.set_ylabel("Observed positive rate")
+    ax.set_title(
+        "Calibration — baseline LogisticRegression, "
+        f"{len(table)} populated deciles (ROC-AUC {cal['auc']:.3f})"
+    )
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.grid(alpha=0.25)
+    ax.legend(loc="upper left")
+    fig.tight_layout()
+    os.makedirs(out_dir, exist_ok=True)
+    path = os.path.join(out_dir, "calibration.png")
     fig.savefig(path, dpi=100)
     plt.close(fig)
     return [path]
