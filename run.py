@@ -64,6 +64,16 @@ def main() -> None:
     print(f"  TN {cm[0,0]:4d}  FP {cm[0,1]:4d}")
     print(f"  FN {cm[1,0]:4d}  TP {cm[1,1]:4d}")
 
+    ci = eda.auc_bootstrap_ci(
+        df[eda.FEATURES].fillna(df[eda.FEATURES].median()).to_numpy(dtype=float),
+        df["Outcome"].to_numpy(),
+    )
+    print(
+        f"ROC-AUC 95% CI (bootstrap, {ci['n_boot']} resamples): "
+        f"{ci['ci_low']:.3f} - {ci['ci_high']:.3f} "
+        f"(sd {ci['std_boot']:.3f})"
+    )
+
     print("\nFeature coefficients (sorted by |coef|; exp_coef = odds ratio):")
     table = eda.coefficient_table(result)
     for row in table.itertuples(index=False):
