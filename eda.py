@@ -268,6 +268,73 @@ def train_baseline(
     }
 
 
+def auc_bootstrap_ci(
+    X: np.ndarray,
+    y: np.ndarray,
+    n_boot: int = 200,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> dict:
+    """Non-parametric bootstrap confidence interval for the ROC-AUC point estimate.
+
+    ``X`` / ``y`` are one evaluation set (the holdout split, or any labelled
+    frame). A fixed model — LogisticRegression fit on all of ``X`` — scores it
+    once; the bootstrap then resamples rows *with replacement* and re-scores
+    each draw's probabilities, so the interval reflects sampling variability
+    of the evaluation set rather than model retraining (the cheap, standard
+    setup when the split itself is already fixed).
+
+    The band is a percentile CI: for ``ci=0.95`` it spans the 2.5th to the
+    97.5th percentile of the bootstrap AUC distribution.
+
+    Returns a dict with:
+
+    - ``auc`` — ROC-AUC of the fixed model on the full evaluation set,
+    - ``ci_low`` / ``ci_high`` — the CI bounds (percentiles of the bootstrap
+      draws), rounded to 4 decimals,
+    - ``n_boot`` / ``ci`` — the requested settings, echoed for callers that
+      print a caption,
+    - ``std_boot`` — standard deviation of the bootstrap AUCs, rounded to 4
+      decimals; a sanity handle for how noisy the estimate is.
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+
+    if len(np.unique(y)) < 2:
+        raise ValueError(
+            "y must contain both classes; a bootstrap over one class has no AUC"
+        )
+
+    model = LogisticRegression(max_iter=1000)
+    model.fit(X, y)
+    proba = model.predict_proba(X)[:, 1]
+    auc = float(roc_auc_score(y, proba))
+
+    n = len(y)
+    alpha = (1.0 - ci) / 2.0
+    rng = np.random.default_rng(seed)
+    boot_aucs: list[float] = []
+    for _ in range(n_boot):
+        idx = rng.integers(0, n, size=n)
+        # a resample that happens to contain only one class has undefined AUC;
+        # with ~35% positives this is rare, and skipping keeps the percentile
+        # computation honest rather than polluting it with 0.5 coin-flips
+        if len(np.unique(y[idx])) < 2:
+            continue
+        boot_aucs.append(float(roc_auc_score(y[idx], proba[idx])))
+
+    low = float(np.percentile(boot_aucs, 100.0 * alpha))
+    high = float(np.percentile(boot_aucs, 100.0 * (1.0 - alpha)))
+    return {
+        "auc": auc,
+        "ci_low": round(low, 4),
+        "ci_high": round(high, 4),
+        "n_boot": n_boot,
+        "ci": ci,
+        "std_boot": round(float(np.std(boot_aucs)), 4),
+    }
+
+
 def imputation_comparison(
     df: pd.DataFrame,
     test_size: float = 0.3,

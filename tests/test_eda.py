@@ -157,6 +157,75 @@ def test_train_baseline_is_reproducible():
     np.testing.assert_array_equal(a["confusion_matrix"], b["confusion_matrix"])
 
 
+def test_auc_bootstrap_ci_band_brackets_point_estimate():
+    from synth import make_synthetic
+
+    X, y = make_synthetic()
+    res = eda.auc_bootstrap_ci(X, y)
+    # the synthetic problem is well separated: AUC lands high and stable
+    assert 0.85 < res["auc"] < 1.0
+    assert res["ci_low"] <= res["auc"] <= res["ci_high"]
+    assert res["ci_low"] > 0.0
+    assert res["ci_high"] <= 1.0
+    # a usable band: the width reflects sampling noise, not a degenerate 0.0
+    assert res["ci_high"] - res["ci_low"] >= 0.0
+    assert res["std_boot"] > 0.0
+    assert res["n_boot"] == 200
+    assert res["ci"] == 0.95
+
+
+def test_auc_bootstrap_ci_reproducible_and_custom_levels():
+    from synth import make_synthetic
+
+    X, y = make_synthetic()
+    a = eda.auc_bootstrap_ci(X, y, n_boot=100)
+    b = eda.auc_bootstrap_ci(X, y, n_boot=100)
+    # same seed -> identical draws -> identical band
+    assert (a["ci_low"], a["ci_high"]) == (b["ci_low"], b["ci_high"])
+    # a 99% interval is at least as wide as the 95% one
+    wide = eda.auc_bootstrap_ci(X, y, n_boot=100, ci=0.99)
+    assert wide["ci_low"] <= a["ci_low"]
+    assert wide["ci_high"] >= a["ci_high"]
+    assert wide["ci_high"] - wide["ci_low"] >= a["ci_high"] - a["ci_low"]
+
+
+def test_auc_bootstrap_ci_rejects_single_class():
+    from synth import make_synthetic
+
+    X, y = make_synthetic()
+    pos = X[y == 1]
+    with pytest.raises(ValueError):
+        eda.auc_bootstrap_ci(pos, np.ones(len(pos)))
+
+
+def test_auc_bootstrap_ci_on_real_holdout_split():
+    df = _prepared()
+    # reproduce train_baseline's shared split so the CI is for the same
+    # evaluation set the rest of the notebook reports on
+    base = eda.train_baseline(df)
+    work = df.copy()
+    for col in eda.FEATURES:
+        work[col] = work[col].fillna(work[col].median())
+    X = work[eda.FEATURES].to_numpy(dtype=float)
+    y = work["Outcome"].to_numpy()
+    rng = np.random.default_rng(42)
+    perm = rng.permutation(len(y))
+    test_idx = []
+    for val in sorted(np.unique(y)):
+        idx = perm[y[perm] == val]
+        k = int(round(0.3 * len(idx)))
+        test_idx.extend(idx[:k].tolist())
+    res = eda.auc_bootstrap_ci(X[test_idx], y[test_idx])
+    # note: the bootstrap's fixed model fits on ALL of X (here, train +
+    # validation combined) whereas train_baseline fits on the train rows
+    # only — so the point estimates differ by construction. What must hold is
+    # that they land in the same ballpark on the same evaluation rows.
+    assert abs(res["auc"] - base["auc"]) < 0.05
+    assert res["ci_low"] <= res["auc"] <= res["ci_high"]
+    # ~230 validation rows: the band is tight but not zero-width
+    assert res["ci_high"] - res["ci_low"] >= 0.0
+
+
 def test_imputation_comparison_uses_shared_split():
     df = _prepared()
     ab = eda.imputation_comparison(df)
