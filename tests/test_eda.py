@@ -480,3 +480,53 @@ def test_plot_calibration_skip_writes_nothing(tmp_path):
     paths = eda.plot_calibration(df, out_dir=str(tmp_path), skip=True)
     assert paths == []
     assert os.listdir(str(tmp_path)) == [], "skip must not write any figure files"
+
+
+def test_feature_ablation_table_shape_and_full_auc_matches_baseline():
+    df = _prepared()
+    ab = eda.feature_ablation(df)
+    base = eda.train_baseline(df)
+    # same split, same model: the full-feature AUC must equal the baseline's
+    assert abs(ab["full_auc"] - round(base["auc"], 4)) < 1e-9
+    table = ab["table"]
+    # one row per feature, all eight present exactly once
+    assert len(table) == len(eda.FEATURES)
+    assert sorted(table["feature"]) == sorted(eda.FEATURES)
+    for col in ("auc_without", "delta_auc"):
+        assert table[col].notna().all()
+
+
+def test_feature_ablation_deltas_consistent():
+    df = _prepared()
+    ab = eda.feature_ablation(df)
+    table = ab["table"]
+    # delta must equal auc_without - full_auc up to independent 4dp rounding
+    # of both sides (the stored values are each rounded, so they can differ by
+    # one last digit from a re-rounded difference)
+    for row in table.itertuples(index=False):
+        assert abs(row.delta_auc - round(row.auc_without - ab["full_auc"], 4)) <= 2e-4
+    # sorted ascending by delta: most informative feature on top
+    deltas = table["delta_auc"].tolist()
+    assert deltas == sorted(deltas)
+
+
+def test_feature_ablation_glucose_most_informative():
+    df = _prepared()
+    ab = eda.feature_ablation(df)
+    table = ab["table"]
+    # on this dataset Glucose is by far the strongest single predictor;
+    # dropping it must hurt AUC more than dropping any other feature
+    assert table.iloc[0]["feature"] == "Glucose"
+    glucose_row = table[table["feature"] == "Glucose"].iloc[0]
+    others = table[table["feature"] != "Glucose"]
+    assert glucose_row["delta_auc"] < others["delta_auc"].min()
+    # and the drop must be material, not noise: well under -0.03 AUC
+    assert glucose_row["delta_auc"] < -0.03
+
+
+def test_feature_ablation_reproducible():
+    df = _prepared()
+    a1 = eda.feature_ablation(df)
+    a2 = eda.feature_ablation(df)
+    pd.testing.assert_frame_equal(a1["table"], a2["table"])
+    assert a1["full_auc"] == a2["full_auc"]

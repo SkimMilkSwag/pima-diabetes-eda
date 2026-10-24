@@ -432,6 +432,77 @@ def coefficient_table(result: dict) -> pd.DataFrame:
     return out.reindex(out["coef"].abs().sort_values(ascending=False).index)
 
 
+def feature_ablation(
+    df: pd.DataFrame,
+    test_size: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """Leave-one-feature-out ablation for the logistic baseline.
+
+    Retrains ``LogisticRegression`` once per dropped feature on the SAME
+    stratified train/validation split as :func:`train_baseline`, and reports
+    the change in ROC-AUC versus the full-feature model:
+
+        delta_auc = auc_without_feature - auc_full
+
+    (negative = the feature was helping). Because every ablation reuses one
+    fixed validation split, the deltas are directly comparable — they isolate
+    each feature's marginal contribution on identical data. The full-frame AUC
+    comes from the same fit path as :func:`train_baseline`, so the table lines
+    up with the headline number printed in ``run.py``.
+
+    Returns a dict with:
+
+    - ``full_auc`` — ROC-AUC of the baseline with all eight features,
+    - ``table`` — a DataFrame with one row per feature: ``feature``,
+      ``auc_without``, ``delta_auc`` (rounded to 4 decimals), sorted by
+      ``delta_auc`` ascending so the most informative feature (the one whose
+      removal hurts most) is on top.
+    """
+    from sklearn.linear_model import LogisticRegression
+    from sklearn.metrics import roc_auc_score
+
+    work = df.copy()
+    for col in FEATURES:
+        work[col] = work[col].fillna(work[col].median())
+    X = work[FEATURES].to_numpy(dtype=float)
+    y = work["Outcome"].to_numpy()
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(y))
+    n_test = int(round(test_size * len(y)))
+    # identical stratified split as train_baseline: same seed, same procedure
+    test_idx = []
+    for val in sorted(np.unique(y)):
+        idx = perm[y[perm] == val]
+        k = int(round(test_size * len(idx)))
+        test_idx.extend(idx[:k].tolist())
+    test_set = set(test_idx)
+    train_idx = [i for i in perm if i not in test_set]
+    test_idx_sorted = sorted(test_idx)
+
+    col_pos = {c: i for i, c in enumerate(FEATURES)}
+
+    def _fit_auc(keep: list[str]) -> float:
+        cols = [col_pos[c] for c in keep]
+        model = LogisticRegression(max_iter=1000)
+        model.fit(X[train_idx][:, cols], y[train_idx])
+        proba = model.predict_proba(X[test_idx_sorted][:, cols])[:, 1]
+        return float(roc_auc_score(y[test_idx_sorted], proba))
+
+    full_auc = _fit_auc(list(FEATURES))
+    rows = []
+    for feat in FEATURES:
+        auc_without = _fit_auc([c for c in FEATURES if c != feat])
+        rows.append({
+            "feature": feat,
+            "auc_without": round(auc_without, 4),
+            "delta_auc": round(auc_without - full_auc, 4),
+        })
+    table = pd.DataFrame(rows).sort_values("delta_auc", kind="stable").reset_index(drop=True)
+    return {"full_auc": round(full_auc, 4), "table": table}
+
+
 def train_random_forest(
     df: pd.DataFrame,
     test_size: float = 0.3,
