@@ -74,10 +74,25 @@ def main() -> None:
         f"(sd {ci['std_boot']:.3f})"
     )
 
-    print("\nFeature coefficients (sorted by |coef|; exp_coef = odds ratio):")
+    print(
+        f"\nFeature coefficients (sorted by |coef|; exp_coef = odds ratio):"
+    )
     table = eda.coefficient_table(result)
     for row in table.itertuples(index=False):
         print(f"  {row.feature:28s} coef={row.coef:+.3f}  odds_ratio={row.exp_coef:.3f}")
+
+    ablation = eda.feature_ablation(df)
+    at = ablation["table"]
+    print(
+        f"\nFeature ablation (retrain baseline on the same split, one feature "
+        f"dropped per row; full-feature ROC-AUC {ablation['full_auc']:.3f}):"
+    )
+    print("  rank  feature                    auc_without   delta_auc")
+    for i, row in enumerate(at.itertuples(index=False), start=1):
+        print(
+            f"  {i:4d}  {row.feature:28s} {row.auc_without:.3f}     "
+            f"{row.delta_auc:+.4f}"
+        )
 
     rf = eda.train_random_forest(df)
     rf_table = eda.rf_importance_table(rf)
