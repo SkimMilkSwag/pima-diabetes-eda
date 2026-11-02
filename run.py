@@ -143,6 +143,12 @@ def main() -> None:
             f"{int(row['fn']):3d}  {int(row['tn']):4d}"
         )
     print(f"  best cutoff by F1: {sweep['best_cutoff']:.1f}")
+    op = eda.operating_point_summary(df)
+    print(
+        f"  best-F1 operating point: cutoff {op['cutoff']:.1f} "
+        f"(precision {op['precision']:.3f} vs. base rate {op['base_rate']:.3f}, "
+        f"recall {op['recall']:.3f}, F1 {op['f1']:.3f})"
+    )
     ts_paths = eda.plot_threshold_sweep(df, out_dir=out_dir, skip=ci)
     if not ci and ts_paths:
         print(f"Wrote threshold sweep chart to {ts_paths[0]}")

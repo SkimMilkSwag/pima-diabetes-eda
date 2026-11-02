@@ -395,6 +395,32 @@ def test_plot_threshold_sweep_writes_png(tmp_path):
     assert os.path.getsize(paths[0]) > 0
 
 
+def test_operating_point_summary_matches_sweep_best_row():
+    df = _prepared()
+    sweep = eda.threshold_sweep(df)
+    op = eda.operating_point_summary(df)
+    # the operating point's cutoff is exactly the sweep's best-F1 cutoff
+    assert op["cutoff"] == sweep["best_cutoff"]
+    row = sweep["table"].loc[sweep["best_cutoff"]]
+    for col in ("precision", "recall", "f1", "tp", "fp", "fn", "tn"):
+        np.testing.assert_allclose(op[col], float(row[col]), atol=1e-9)
+    # AUC context matches the sweep's AUC exactly (same model, same split)
+    np.testing.assert_allclose(op["auc"], sweep["auc"], atol=1e-9)
+    # base rate is a valid probability and the operating point's precision must
+    # beat the "predict everything positive" base-rate rule to be useful
+    assert 0.3 < op["base_rate"] < 0.5
+    assert op["precision"] > op["base_rate"]
+
+
+def test_operating_point_summary_custom_cutoffs_and_reproducible():
+    df = _prepared()
+    a = eda.operating_point_summary(df, cutoffs=[0.2, 0.3, 0.4, 0.5])
+    b = eda.operating_point_summary(df, cutoffs=[0.2, 0.3, 0.4, 0.5])
+    assert a == b, "same inputs must give the identical operating point"
+    # with a restricted grid the best-F1 cutoff is one of the provided cutoffs
+    assert a["cutoff"] in [0.2, 0.3, 0.4, 0.5]
+
+
 def test_plot_threshold_sweep_skip_writes_nothing(tmp_path):
     df = _prepared()
     paths = eda.plot_threshold_sweep(df, out_dir=str(tmp_path), skip=True)

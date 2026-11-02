@@ -768,6 +768,63 @@ def threshold_sweep(
     }
 
 
+def operating_point_summary(
+    df: pd.DataFrame,
+    cutoffs: list[float] | None = None,
+    test_size: float = 0.3,
+    seed: int = 42,
+) -> dict:
+    """The single best-F1 operating point of the threshold sweep, as a dict.
+
+    ``threshold_sweep`` returns a full cutoff-by-cutoff table; this wraps it to
+    surface just the one row a reader actually wants — the F1-optimal cutoff and
+    its precision / recall / F1 / confusion counts — plus the ROC-AUC for context.
+    It reuses :func:`threshold_sweep` (same model, same stratified split), so the
+    numbers line up with the sweep table printed by ``run.py``.
+
+    Returns a dict:
+
+    - ``cutoff`` — the best-F1 cutoff (the sweep's ``best_cutoff``),
+    - ``precision`` / ``recall`` / ``f1`` — metrics at that cutoff,
+    - ``tp`` / ``fp`` / ``fn`` / ``tn`` — confusion counts at that cutoff,
+    - ``auc`` — ROC-AUC of the underlying probabilities (context),
+    - ``base_rate`` — positive rate of the validation split (the precision a
+      "predict everything positive" rule would get; the operating point's
+      precision must beat it to be useful).
+    """
+    sweep = threshold_sweep(
+        df,
+        cutoffs=cutoffs if cutoffs is not None else (0.3, 0.4, 0.5, 0.6, 0.7),
+        test_size=test_size,
+        seed=seed,
+    )
+    row = sweep["table"].loc[sweep["best_cutoff"]]
+    # base rate: the validation split's positive fraction. Recomputed from the
+    # same stratified partition so it matches the sweep's evaluation set rather
+    # than the full frame (stratification keeps them close but not identical).
+    y = df["Outcome"].to_numpy()
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(y))
+    test_idx = []
+    for val in sorted(np.unique(y)):
+        idx = perm[y[perm] == val]
+        k = int(round(test_size * len(idx)))
+        test_idx.extend(idx[:k].tolist())
+    base_rate = float(np.mean(y[sorted(set(test_idx))]))
+    return {
+        "cutoff": float(sweep["best_cutoff"]),
+        "precision": float(row["precision"]),
+        "recall": float(row["recall"]),
+        "f1": float(row["f1"]),
+        "tp": int(row["tp"]),
+        "fp": int(row["fp"]),
+        "fn": int(row["fn"]),
+        "tn": int(row["tn"]),
+        "auc": float(sweep["auc"]),
+        "base_rate": round(base_rate, 4),
+    }
+
+
 def calibration_check(
     df: pd.DataFrame,
     n_bins: int = 10,
