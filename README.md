@@ -55,13 +55,16 @@ locally to preview that path.
 | Per-feature means, split by outcome + delta | `feature_means_by_outcome()` |
 | Pearson correlation matrix (features + Outcome) | `correlation_matrix()` |
 | Top-k features by \|corr\| with Outcome | `top_correlates_with_outcome()` |
+| Per-feature signed corr with Outcome, ranked | `feature_correlation_with_outcome()` |
 | LogisticRegression baseline (ROC-AUC, confusion matrix) | `train_baseline()` |
 | Bootstrap 95% CI on the ROC-AUC point estimate | `auc_bootstrap_ci()` |
 | Feature ablation: leave-one-feature-out AUC delta table | `feature_ablation()` |
+| Bootstrap-CI ablation check (drop least-informative feature) | `auc_bootstrap_ci_ablation_check()` |
 | RandomForest comparison + feature importances (chart) | `train_random_forest()`, `rf_importance_table()`, `plot_rf_importance()` |
 | Median-imputation A/B on a shared split | `imputation_comparison()` |
 | Coefficients / odds-ratio table | `coefficient_table()` |
 | Decision-threshold sweep (precision/recall/F1 by cutoff) + chart | `threshold_sweep()`, `plot_threshold_sweep()` |
+| Calibration check (predicted vs observed per decile) + chart | `calibration_check()`, `plot_calibration()` |
 
 ## CI
 
