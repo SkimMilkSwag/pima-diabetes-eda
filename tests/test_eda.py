@@ -530,3 +530,40 @@ def test_feature_ablation_reproducible():
     a2 = eda.feature_ablation(df)
     pd.testing.assert_frame_equal(a1["table"], a2["table"])
     assert a1["full_auc"] == a2["full_auc"]
+
+
+def test_bootstrap_ci_ablation_check_shape_and_split():
+    df = _prepared()
+    res = eda.auc_bootstrap_ci_ablation_check(df, n_boot=100)
+    # the dropped feature must be a real feature from the ablation table
+    assert res["dropped_feature"] in eda.FEATURES
+    # both CIs bracket their own point estimates
+    for arm in ("full", "ablated"):
+        ci = res[arm]
+        assert ci["ci_low"] <= ci["auc"] <= ci["ci_high"]
+        assert 0.5 < ci["auc"] < 1.0
+    # the ablation check must agree with feature_ablation on which feature is
+    # least informative: dropping it should move the AUC by exactly that
+    # feature's delta (within bootstrap noise, so allow a small tolerance)
+    ab = eda.feature_ablation(df)
+    table = ab["table"]
+    expected_delta = float(
+        table[table["feature"] == res["dropped_feature"]]["delta_auc"].iloc[0]
+    )
+    # band_shift is the bootstrap AUC difference; it should be in the same
+    # ballpark as the ablation delta (both measure "what we lose by dropping")
+    assert abs(res["band_shift"] - expected_delta) < 0.05
+    # both arms share the same evaluation split: the full-model CI's point
+    # estimate must land within the bootstrap noise of train_baseline's AUC
+    base = eda.train_baseline(df)
+    assert abs(res["full"]["auc"] - base["auc"]) < 0.05
+
+
+def test_bootstrap_ci_ablation_check_reproducible():
+    df = _prepared()
+    a = eda.auc_bootstrap_ci_ablation_check(df, n_boot=100)
+    b = eda.auc_bootstrap_ci_ablation_check(df, n_boot=100)
+    assert a["dropped_feature"] == b["dropped_feature"]
+    assert a["band_shift"] == b["band_shift"]
+    assert a["full"]["ci_low"] == b["full"]["ci_low"]
+    assert a["ablated"]["ci_high"] == b["ablated"]["ci_high"]

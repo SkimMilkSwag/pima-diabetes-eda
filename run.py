@@ -81,11 +81,11 @@ def main() -> None:
     for row in table.itertuples(index=False):
         print(f"  {row.feature:28s} coef={row.coef:+.3f}  odds_ratio={row.exp_coef:.3f}")
 
-    ablation = eda.feature_ablation(df)
-    at = ablation["table"]
+    ab = eda.feature_ablation(df)
+    at = ab["table"]
     print(
         f"\nFeature ablation (retrain baseline on the same split, one feature "
-        f"dropped per row; full-feature ROC-AUC {ablation['full_auc']:.3f}):"
+        f"dropped per row; full-feature ROC-AUC {ab['full_auc']:.3f}):"
     )
     print("  rank  feature                    auc_without   delta_auc")
     for i, row in enumerate(at.itertuples(index=False), start=1):
@@ -93,6 +93,18 @@ def main() -> None:
             f"  {i:4d}  {row.feature:28s} {row.auc_without:.3f}     "
             f"{row.delta_auc:+.4f}"
         )
+
+    # bootstrap-CI ablation sanity check: does dropping the least-informative
+    # feature (per the ablation table) actually move the uncertainty band?
+    ciab = eda.auc_bootstrap_ci_ablation_check(df, n_boot=200)
+    print(
+        f"\nBootstrap-CI ablation check (drop {ciab['dropped_feature']}, "
+        f"{ciab['full']['n_boot']} resamples each arm): full AUC {ciab['full']['auc']:.3f} "
+        f"[{ciab['full']['ci_low']:.3f}-{ciab['full']['ci_high']:.3f}] vs. ablated "
+        f"{ciab['ablated']['auc']:.3f} [{ciab['ablated']['ci_low']:.3f}-"
+        f"{ciab['ablated']['ci_high']:.3f}] (band shift {ciab['band_shift']:+.4f}, "
+        f"width delta {ciab['band_width_delta']:+.4f})"
+    )
 
     rf = eda.train_random_forest(df)
     rf_table = eda.rf_importance_table(rf)

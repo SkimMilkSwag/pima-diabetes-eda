@@ -335,6 +335,83 @@ def auc_bootstrap_ci(
     }
 
 
+def auc_bootstrap_ci_ablation_check(
+    df: pd.DataFrame,
+    test_size: float = 0.3,
+    n_boot: int = 200,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> dict:
+    """Bootstrap-CI ablation sanity check for the baseline model.
+
+    Recomputes the ROC-AUC bootstrap confidence interval (same percentile band
+    as :func:`auc_bootstrap_ci`) after dropping the least-informative feature —
+    the one whose removal hurts the full-model AUC *least* in
+    :func:`feature_ablation`. If that feature is truly redundant, the ablated
+    band should sit close to the full-model band (the point estimate shifts
+    only by the feature's marginal delta and the band width stays comparable).
+    If instead the drop moves the band a lot, the "least informative" feature
+    was doing more work than its single-feature delta suggested.
+
+    Both arms share :func:`train_baseline`'s stratified train/validation split
+    (same seed, same procedure), so the comparison isolates the feature's
+    effect on the *evaluation* uncertainty rather than a different dataset.
+
+    Returns a dict with:
+
+    - ``dropped_feature`` — the ablated feature's name (the ablation table's
+      top-ranked row in reverse, i.e. smallest |delta|),
+    - ``full`` — the full-model CI result (from :func:`auc_bootstrap_ci` on
+      the validation rows),
+    - ``ablated`` — the same CI recomputed with that feature removed from X,
+    - ``band_shift`` — how far the ablated point estimate moved
+      (``ablated.auc - full.auc``, signed), rounded to 4 decimals,
+    - ``band_width_delta`` — change in CI width (``ablated`` minus ``full``),
+      a handle on whether the uncertainty itself changed.
+    """
+    ab = feature_ablation(df, test_size=test_size, seed=seed)
+    table = ab["table"]
+    # the least-informative feature is the one whose removal hurts AUC the
+    # LEAST — the last row of the ascending-sorted ablation table
+    dropped_feature = str(table.iloc[-1]["feature"])
+
+    work = df.copy()
+    for col in FEATURES:
+        work[col] = work[col].fillna(work[col].median())
+    X_full = work[FEATURES].to_numpy(dtype=float)
+    y = work["Outcome"].to_numpy()
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(y))
+    test_idx = []
+    for val in sorted(np.unique(y)):
+        idx = perm[y[perm] == val]
+        k = int(round(test_size * len(idx)))
+        test_idx.extend(idx[:k].tolist())
+    test_idx_sorted = sorted(set(test_idx))
+
+    # same validation rows as train_baseline, so the two CIs bracket the same
+    # evaluation set; only the feature set differs between the two arms.
+    X_val_full = X_full[test_idx_sorted]
+
+    col_pos = {c: i for i, c in enumerate(FEATURES)}
+    keep_cols = [col_pos[c] for c in FEATURES if c != dropped_feature]
+    X_val_ablated = X_full[test_idx_sorted][:, keep_cols]
+
+    full = auc_bootstrap_ci(X_val_full, y[test_idx_sorted], n_boot=n_boot, ci=ci, seed=seed)
+    ablated = auc_bootstrap_ci(X_val_ablated, y[test_idx_sorted], n_boot=n_boot, ci=ci, seed=seed)
+
+    return {
+        "dropped_feature": dropped_feature,
+        "full": full,
+        "ablated": ablated,
+        "band_shift": round(ablated["auc"] - full["auc"], 4),
+        "band_width_delta": round(
+            (ablated["ci_high"] - ablated["ci_low"]) - (full["ci_high"] - full["ci_low"]), 4
+        ),
+    }
+
+
 def imputation_comparison(
     df: pd.DataFrame,
     test_size: float = 0.3,
