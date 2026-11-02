@@ -567,3 +567,37 @@ def test_bootstrap_ci_ablation_check_reproducible():
     assert a["band_shift"] == b["band_shift"]
     assert a["full"]["ci_low"] == b["full"]["ci_low"]
     assert a["ablated"]["ci_high"] == b["ablated"]["ci_high"]
+
+
+def test_feature_correlation_with_outcome_shape_and_order():
+    df = _prepared()
+    t = eda.feature_correlation_with_outcome(df)
+    # one row per feature, in the canonical FEATURES order (not ranked order)
+    assert list(t.columns) == ["feature", "corr", "abs_corr", "rank"]
+    assert list(t["feature"]) == eda.FEATURES
+    # abs_corr is |corr| up to 4dp rounding
+    np.testing.assert_allclose(
+        t["abs_corr"].fillna(-1).values,
+        t["corr"].abs().round(4).fillna(-1).values,
+        atol=1e-9,
+    )
+
+
+def test_feature_correlation_with_outcome_rank_and_sign():
+    df = _prepared()
+    t = eda.feature_correlation_with_outcome(df)
+    ranked = t.dropna(subset=["rank"])
+    # ranks are a contiguous 1..N over the ranked (non-NaN) features
+    assert sorted(ranked["rank"].tolist()) == list(range(1, len(ranked) + 1))
+    # abs_corr is monotonically non-increasing in rank order
+    by_rank = ranked.sort_values("rank")
+    assert by_rank["abs_corr"].is_monotonic_decreasing
+    # Glucose is the strongest single predictor on this dataset: it must hold
+    # rank 1 and a positive (Outcome=1-direction) signed correlation
+    glu = t[t["feature"] == "Glucose"].iloc[0]
+    assert int(glu["rank"]) == 1
+    assert glu["corr"] > 0
+    # the top-3 by this table must agree with top_correlates_with_outcome's
+    # absolute ranking (same underlying Pearson, different presentation)
+    top_k = eda.top_correlates_with_outcome(df, k=3).index.tolist()
+    assert list(by_rank.head(3)["feature"]) == top_k

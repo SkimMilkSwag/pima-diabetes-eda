@@ -980,3 +980,45 @@ def plot_calibration(
 def describe(df: pd.DataFrame) -> pd.DataFrame:
     """Convenience wrapper: the standard pandas describe for all features."""
     return df[FEATURES].describe().T.round(3)
+
+
+def feature_correlation_with_outcome(df: pd.DataFrame) -> pd.DataFrame:
+    """Per-feature signed Pearson correlation with Outcome, ranked.
+
+    Unlike :func:`top_correlates_with_outcome` (which returns the top-``k`` by
+    absolute value as a Series), this returns a full DataFrame with one row per
+    feature in ``FEATURES`` order, carrying the *signed* correlation so a
+    reader can tell apart a feature that pushes toward Outcome=1 from one that
+    pushes toward Outcome=0. Columns:
+
+    - ``feature`` — the feature name,
+    - ``corr`` — signed Pearson correlation with ``Outcome`` (NaN if the
+      feature is constant on this frame),
+    - ``abs_corr`` — ``|corr|``,
+    - ``rank`` — 1..N by ``abs_corr`` descending; ties broken by feature name
+      for a deterministic table.
+
+    The NaN handling matters: after :func:`coerce_zeros`, ``SkinThickness``
+    and ``Insulin`` are ~30–50% missing, and Pearson-on-NaN can be dominated
+    by the rows that survive — the signed value is still informative but the
+    rank should be read with that caveat.
+    """
+    corr = df[FEATURES + ["Outcome"]].corr()["Outcome"].drop("Outcome")
+    rows = []
+    for feat in FEATURES:
+        c = corr.get(feat, np.nan)
+        if np.isnan(c):
+            rows.append({"feature": feat, "corr": np.nan, "abs_corr": np.nan})
+        else:
+            rows.append(
+                {"feature": feat, "corr": round(float(c), 4), "abs_corr": round(abs(float(c)), 4)}
+            )
+    out = pd.DataFrame(rows)
+    # rank by |corr| descending; NaN (constant) features get no rank and sort last
+    ranked = out.dropna(subset=["abs_corr"]).sort_values(
+        ["abs_corr", "feature"], ascending=[False, True]
+    )
+    rank_by_feat = {r.feature: i for i, r in enumerate(ranked.itertuples(index=False), start=1)}
+    out["rank"] = out["feature"].map(lambda f: rank_by_feat.get(f))
+    # restore the original FEATURES row order
+    return out.set_index("feature").loc[FEATURES].reset_index()
