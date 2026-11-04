@@ -60,6 +60,7 @@ locally to preview that path.
 | Bootstrap 95% CI on the ROC-AUC point estimate | `auc_bootstrap_ci()` |
 | Feature ablation: leave-one-feature-out AUC delta table | `feature_ablation()` |
 | Bootstrap-CI ablation check (drop least-informative feature) | `auc_bootstrap_ci_ablation_check()` |
+| Per-feature single-predictor ROC-AUC + bootstrap CI, ranked | `auc_bootstrap_ci_single_feature()`, `auc_bootstrap_ci_by_feature()` |
 | RandomForest comparison + feature importances (chart) | `train_random_forest()`, `rf_importance_table()`, `plot_rf_importance()` |
 | Median-imputation A/B on a shared split | `imputation_comparison()` |
 | Coefficients / odds-ratio table | `coefficient_table()` |

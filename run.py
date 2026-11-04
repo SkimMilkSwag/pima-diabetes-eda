@@ -106,6 +106,17 @@ def main() -> None:
         f"width delta {ciab['band_width_delta']:+.4f})"
     )
 
+    # per-feature single-predictor bootstrap CIs: how informative is each
+    # marker on its own, with an uncertainty band? (the other half of the
+    # leave-one-out ablation above)
+    per_feat = eda.auc_bootstrap_ci_by_feature(df, n_boot=200)
+    print("\nSingle-feature ROC-AUC with bootstrap 95% CI (ranked):")
+    for row in per_feat.itertuples(index=False):
+        print(
+            f"  {row.feature:28s} AUC {row.auc:.3f} "
+            f"[{row.ci_low:.3f}-{row.ci_high:.3f}]  width {row.band_width:.4f}"
+        )
+
     rf = eda.train_random_forest(df)
     rf_table = eda.rf_importance_table(rf)
     print(

@@ -627,3 +627,57 @@ def test_feature_correlation_with_outcome_rank_and_sign():
     # absolute ranking (same underlying Pearson, different presentation)
     top_k = eda.top_correlates_with_outcome(df, k=3).index.tolist()
     assert list(by_rank.head(3)["feature"]) == top_k
+
+
+# --- single-feature bootstrap CIs -------------------------------------------
+
+def test_single_feature_ci_band_and_shape():
+    df = _prepared()
+    res = eda.auc_bootstrap_ci_single_feature(df, "Glucose", n_boot=100)
+    assert res["feature"] == "Glucose"
+    # band brackets the point estimate and sits in (0, 1]
+    assert 0.0 <= res["ci_low"] <= res["auc"] <= res["ci_high"] <= 1.0
+    assert res["band_width"] == round(res["ci_high"] - res["ci_low"], 4)
+    assert res["n_boot"] == 100 and res["ci"] == 0.95
+    # glucose is genuinely predictive on its own: well above chance
+    assert res["auc"] > 0.6
+
+
+def test_single_feature_ci_rejects_unknown_feature():
+    df = _prepared()
+    with pytest.raises(ValueError):
+        eda.auc_bootstrap_ci_single_feature(df, "NotAColumn", n_boot=10)
+
+
+def test_single_feature_ci_noise_feature_near_chance():
+    """A near-uninformative feature's standalone AUC lands close to 0.5.
+
+    On the Pima data every feature has *some* signal, so this is a loose
+    bound: the point is that the single-feature band is centered where the
+    signal actually is (unlike a strong marker such as Glucose).
+    """
+    df = _prepared()
+    res = eda.auc_bootstrap_ci_single_feature(df, "Insulin", n_boot=100)
+    assert 0.4 < res["auc"] < 0.7
+
+
+def test_by_feature_table_ranking_and_columns():
+    df = _prepared()
+    table = eda.auc_bootstrap_ci_by_feature(df, features=["Glucose", "Insulin", "Pregnancies"], n_boot=100)
+    assert list(table.columns) == ["feature", "auc", "ci_low", "ci_high", "band_width"]
+    assert len(table) == 3
+    # sorted by descending AUC; glucose is the strongest single marker of the three
+    assert table.iloc[0]["auc"] >= table.iloc[-1]["auc"]
+    assert set(table["feature"]) == {"Glucose", "Insulin", "Pregnancies"}
+    # every row's band brackets its point estimate
+    for row in table.itertuples(index=False):
+        assert row.ci_low <= row.auc <= row.ci_high
+
+
+def test_by_feature_full_table_covers_all_features():
+    df = _prepared()
+    table = eda.auc_bootstrap_ci_by_feature(df, n_boot=50)
+    assert set(table["feature"]) == set(eda.FEATURES)
+    # the ranking is stable: same data + seed -> same order
+    again = eda.auc_bootstrap_ci_by_feature(df, n_boot=50)
+    assert list(again["feature"]) == list(table["feature"])

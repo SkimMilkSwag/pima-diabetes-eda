@@ -412,6 +412,94 @@ def auc_bootstrap_ci_ablation_check(
     }
 
 
+def auc_bootstrap_ci_single_feature(
+    df: pd.DataFrame,
+    feature: str,
+    test_size: float = 0.3,
+    n_boot: int = 200,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> dict:
+    """Bootstrap CI for the ROC-AUC of a *single-feature* logistic baseline.
+
+    The leave-one-feature-out ablation (:func:`feature_ablation`) shows how
+    much each feature contributes to the full model; this is the other half
+    of that question — how informative each feature is on its own, with an
+    uncertainty band around the number. A feature whose standalone AUC band
+    sits near 0.5 (e.g. a pure noise column) adds nothing by itself even if
+    the full model uses it; one whose band clears 0.5 comfortably is usable
+    as a cheap single-marker screen.
+
+    Setup: median-impute that feature's missing values, then reuse
+    :func:`auc_bootstrap_ci` on the validation rows of the same shared
+    stratified split the rest of the analysis uses (identical seed and
+    procedure to :func:`train_baseline`), so bands across features are
+    directly comparable — same evaluation set, only the predictor changes.
+
+    Returns:
+
+    - ``feature`` — the feature name, echoed,
+    - ``auc`` / ``ci_low`` / ``ci_high`` / ``n_boot`` / ``ci`` / ``std_boot``
+      — the :func:`auc_bootstrap_ci` fields for this one predictor,
+    - ``band_width`` — ``ci_high - ci_low``, the headline uncertainty number.
+    """
+    if feature not in FEATURES:
+        raise ValueError(f"unknown feature {feature!r}; expected one of {FEATURES}")
+
+    work = df.copy()
+    for col in FEATURES:
+        work[col] = work[col].fillna(work[col].median())
+    X = work[[feature]].to_numpy(dtype=float)
+    y = work["Outcome"].to_numpy()
+
+    rng = np.random.default_rng(seed)
+    perm = rng.permutation(len(y))
+    test_idx = []
+    for val in sorted(np.unique(y)):
+        idx = perm[y[perm] == val]
+        k = int(round(test_size * len(idx)))
+        test_idx.extend(idx[:k].tolist())
+    test_idx_sorted = sorted(set(test_idx))
+
+    res = auc_bootstrap_ci(X[test_idx_sorted], y[test_idx_sorted], n_boot=n_boot, ci=ci, seed=seed)
+    return {
+        "feature": feature,
+        "auc": res["auc"],
+        "ci_low": res["ci_low"],
+        "ci_high": res["ci_high"],
+        "band_width": round(res["ci_high"] - res["ci_low"], 4),
+        "n_boot": res["n_boot"],
+        "ci": res["ci"],
+        "std_boot": res["std_boot"],
+    }
+
+
+def auc_bootstrap_ci_by_feature(
+    df: pd.DataFrame,
+    features: list[str] | None = None,
+    test_size: float = 0.3,
+    n_boot: int = 200,
+    ci: float = 0.95,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """Per-feature single-predictor bootstrap AUC table, ranked by point estimate.
+
+    Runs :func:`auc_bootstrap_ci_single_feature` over every feature in
+    ``features`` (default: all of :data:`FEATURES`) and collects the results
+    into a DataFrame with one row per feature — ``feature``, ``auc``,
+    ``ci_low``, ``ci_high``, ``band_width`` — sorted by descending AUC so the
+    most informative single marker sits on top. Same shared validation rows
+    for every feature, which is what makes the column comparable.
+    """
+    cols = list(features) if features is not None else list(FEATURES)
+    rows = [
+        auc_bootstrap_ci_single_feature(df, f, test_size=test_size, n_boot=n_boot, ci=ci, seed=seed)
+        for f in cols
+    ]
+    table = pd.DataFrame(rows)[["feature", "auc", "ci_low", "ci_high", "band_width"]]
+    return table.sort_values("auc", ascending=False).reset_index(drop=True)
+
+
 def imputation_comparison(
     df: pd.DataFrame,
     test_size: float = 0.3,
