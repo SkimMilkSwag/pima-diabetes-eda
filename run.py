@@ -47,6 +47,21 @@ def main() -> None:
     print("\nFull correlation matrix:")
     print(eda.correlation_matrix(df).to_string())
 
+    print("\nPairwise product-vs-Outcome screen (top 5 of 28 feature pairs):")
+    pair_table = eda.pairwise_product_correlation_with_outcome(df, k=5)
+    for row in pair_table.itertuples(index=False):
+        print(
+            f"  {row.rank:2d}  {row.feature_a:26s} x {row.feature_b:24s} "
+            f"corr={row.corr:+.3f}  (n={int(row.n_used)})"
+        )
+    flags = eda.flag_top_pairs(df)
+    print(
+        f"  flagged top-2: "
+        + ", ".join(
+            f"{f['pair']} ({f['corr']:+.3f})" for f in flags
+        )
+    )
+
     out_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "plots")
     paths = eda.plot_distributions(df, out_dir=out_dir, skip=ci)
     if ci:

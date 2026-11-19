@@ -1167,3 +1167,115 @@ def feature_correlation_with_outcome(df: pd.DataFrame) -> pd.DataFrame:
     out["rank"] = out["feature"].map(lambda f: rank_by_feat.get(f))
     # restore the original FEATURES row order
     return out.set_index("feature").loc[FEATURES].reset_index()
+
+
+def _pairwise_product_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Score all 28 feature pairs for product-vs-Outcome correlation.
+
+    Returns the unranked-truncated full table (canonical pair order) with a
+    ``rank`` column: 1..N among computable pairs, NaN for constant-product
+    pairs. Shared by :func:`pairwise_product_correlation_with_outcome` (which
+    sorts and takes its head) and :func:`flag_top_pairs` (which flags rows).
+    """
+    y = df["Outcome"]
+    rows = []
+    for i, a in enumerate(FEATURES):
+        for b in FEATURES[i + 1 :]:
+            mask = df[[a, b]].notna().all(axis=1) & y.notna()
+            n_used = int(mask.sum())
+            prod = (df.loc[mask, a] * df.loc[mask, b]).to_numpy(dtype=float)
+            yt = y.loc[mask].to_numpy(dtype=float)
+            c = np.nan if n_used < 3 else float(np.corrcoef(prod, yt)[0, 1])
+            if np.isnan(c):
+                rows.append(
+                    {
+                        "feature_a": a,
+                        "feature_b": b,
+                        "corr": np.nan,
+                        "abs_corr": np.nan,
+                        "n_used": n_used,
+                    }
+                )
+            else:
+                rows.append(
+                    {
+                        "feature_a": a,
+                        "feature_b": b,
+                        "corr": round(float(c), 4),
+                        "abs_corr": round(abs(float(c)), 4),
+                        "n_used": n_used,
+                    }
+                )
+    out = pd.DataFrame(rows)
+    order = list(
+        out.dropna(subset=["abs_corr"])
+        .sort_values(["abs_corr", "feature_a", "feature_b"], ascending=[False, True, True])
+        ["feature_a"]
+        .index
+    )
+    rank_by_pos = {pos: i for i, pos in enumerate(order, start=1)}
+    out["rank"] = [rank_by_pos.get(pos) for pos in range(len(out))]
+    return out
+
+
+def pairwise_product_correlation_with_outcome(
+    df: pd.DataFrame, k: int = 5
+) -> pd.DataFrame:
+    """Interaction-screen: rank feature *pairs* by correlation of their product with Outcome.
+
+    The univariate table (:func:`feature_correlation_with_outcome`) answers
+    "which single feature pushes on the outcome?"; this one asks the follow-up —
+    does the *joint* behavior of two features carry signal the marginals miss?
+    For every unordered pair ``(a, b)`` of :data:`FEATURES` (28 pairs), the
+    Pearson correlation between the element-wise product ``a * b`` and
+    ``Outcome`` is computed on complete rows for that pair, i.e. rows where
+    both features are non-missing — so after :func:`coerce_zeros` a pair like
+    ``(SkinThickness, Insulin)`` is scored only on the rows where both were
+    actually measured, which is exactly the population in which their product
+    is defined.
+
+    The product is the simplest possible interaction probe: if two features act
+    jointly (e.g. high BMI *and* high Glucose marking a different risk regime
+    than either alone), their product correlates with ``Outcome`` even when the
+    marginals only correlate weakly. It is deliberately not scale-invariant —
+    product magnitudes depend on each feature's units — so the table is read as
+    a *screening* order, not an effect-size ranking; follow-up for a flagged
+    pair would be a stratified or model-based check.
+
+    Columns: ``feature_a``, ``feature_b``, ``corr`` (signed), ``abs_corr``,
+    ``n_used`` (complete rows scored), ``rank`` (1 = strongest |corr|).
+    Pairs whose product is constant (zero variance on the usable rows) get a
+    NaN correlation, no rank, and sort last; among ranked rows ties break by
+    feature names. Returns the top ``k`` pairs (default 5), most correlated first.
+    """
+    return _pairwise_product_frame(df).sort_values(
+        ["abs_corr", "feature_a", "feature_b"],
+        ascending=[False, True, True],
+        na_position="last",
+        kind="stable",
+    ).head(k).reset_index(drop=True)
+
+
+def flag_top_pairs(
+    df: pd.DataFrame, top_n: int = 2
+) -> list[dict]:
+    """The ``top_n`` strongest product-Outcome pairs as flag dicts for printing.
+
+    Thin wrapper over :func:`pairwise_product_correlation_with_outcome` that
+    formats each flagged pair on one line — the pair's names, the signed and
+    absolute correlation, the number of complete rows it was scored on, and
+    its rank among all 28 pairs — so callers (``run.py``, notebooks) can print
+    a compact "top interactions" block without re-deriving anything. The same
+    canonical pair order and ranking as the table apply.
+    """
+    table = pairwise_product_correlation_with_outcome(df, k=top_n)
+    return [
+        {
+            "pair": f"{row['feature_a']} x {row['feature_b']}",
+            "corr": row["corr"],
+            "abs_corr": row["abs_corr"],
+            "n_used": int(row["n_used"]),
+            "rank": int(row["rank"]),
+        }
+        for _, row in table.iterrows()
+    ]
