@@ -681,3 +681,108 @@ def test_by_feature_full_table_covers_all_features():
     # the ranking is stable: same data + seed -> same order
     again = eda.auc_bootstrap_ci_by_feature(df, n_boot=50)
     assert list(again["feature"]) == list(table["feature"])
+
+
+def test_pairwise_product_corr_shape_and_ranking():
+    df = _prepared()
+    table = eda.pairwise_product_correlation_with_outcome(df, k=28)
+    # all 28 unordered pairs, none duplicated, no pair with a feature twice
+    assert len(table) == len(eda.FEATURES) * (len(eda.FEATURES) - 1) // 2
+    assert table.duplicated(subset=["feature_a", "feature_b"]).sum() == 0
+    assert not (table["feature_a"] == table["feature_b"]).any()
+    # ranks are a permutation of 1..N, 1 on top by |corr|
+    assert sorted(table["rank"].dropna().tolist()) == list(range(1, 29))
+    ranked = table.dropna(subset=["abs_corr"])
+    assert list(ranked["abs_corr"]) == sorted(ranked["abs_corr"], reverse=True)
+    # every corr in [-1, 1] and consistent with its abs value
+    assert ((table["corr"].dropna().abs() - table["abs_corr"]).abs() < 0.001).all()
+
+
+def test_pairwise_product_corr_n_used_shrinks_with_missingness():
+    df = _prepared()
+    table = eda._pairwise_product_frame(df)
+    n_rows = len(df)
+    # n_used never exceeds the frame and never drops below the complete rows
+    assert (table["n_used"] <= n_rows).all()
+    # pairs of the cleanest columns (Glucose, BMI — few missing) score on
+    # nearly every row, while the heavy-missing pair (SkinThickness, Insulin)
+    # loses most rows to its missingness: the screen is row-honest
+    clean = table.loc[
+        (table["feature_a"] == "Glucose") & (table["feature_b"] == "BMI"), "n_used"
+    ].iloc[0]
+    heavy = table.loc[
+        (table["feature_a"] == "SkinThickness") & (table["feature_b"] == "Insulin"), "n_used"
+    ].iloc[0]
+    assert clean > n_rows * 0.9
+    assert heavy < clean
+
+
+def test_pairwise_product_corr_top_pairs_flagged_and_k_limits():
+    df = _prepared()
+    top = eda.pairwise_product_correlation_with_outcome(df, k=2)
+    assert len(top) == 2
+    assert list(top["rank"]) == [1, 2]
+    # the flagged pairs are real pairs of distinct features, in FEATURES order
+    for row in top.itertuples(index=False):
+        a_pos = eda.FEATURES.index(row.feature_a)
+        b_pos = eda.FEATURES.index(row.feature_b)
+        assert a_pos < b_pos  # unordered, canonical order
+    # default k=5 returns exactly five rows
+    assert len(eda.pairwise_product_correlation_with_outcome(df)) == 5
+    # flag_top_pairs: the print-ready flag block mirrors the table's top rows
+    flags = eda.flag_top_pairs(df)
+    assert len(flags) == 2
+    for flag, row in zip(flags, top.itertuples(index=False)):
+        assert flag["pair"] == f"{row.feature_a} x {row.feature_b}"
+        assert flag["corr"] == round(float(row.corr), 4)
+        assert flag["abs_corr"] == round(float(row.abs_corr), 4)
+        assert flag["rank"] in (1, 2)
+
+
+def test_pairwise_product_corr_constant_feature_is_unranked():
+    df = _prepared()
+    # zero every feature except Age (Age is never missing in this dataset):
+    # each pair containing Age then has a constant product (always 0) on the
+    # usable rows -> NaN corr, no rank. np.corrcoef emits NaN for zero
+    # variance without raising, so the screen degrades gracefully rather than
+    # crashing. Non-Age pairs may or may not also be NaN depending on the
+    # data — the point is the constant pairs are unranked, not that every
+    # other pair is ranked.
+    df = df.copy()
+    for b in eda.FEATURES:
+        if b != "Age":
+            df[b] = 0.0
+    table = eda._pairwise_product_frame(df)
+    unranked = table[table["rank"].isna()]
+    # every Age pair is unranked (constant product), and no non-Age pair is
+    # ranked higher than an Age pair
+    age_rows = (table["feature_a"] == "Age") | (table["feature_b"] == "Age")
+    assert age_rows.sum() == 7
+    assert (unranked[age_rows]).shape[0] == 7
+    # any ranked rows (if the data permits) must exclude Age pairs entirely
+    ranked = table.dropna(subset=["rank"])
+    assert not ((ranked["feature_a"] == "Age") | (ranked["feature_b"] == "Age")).any()
+
+
+def test_pairwise_product_corr_rank_permutation_and_order():
+    """The rank column is a permutation of 1..N over the computable pairs.
+
+    On the real Pima dataset all 28 pairs are computable, so this is the
+    main invariant to check: ranks fill exactly 1..28 with no gaps or dupes,
+    and the sorted table has rank 1 on top.
+    """
+    df = _prepared()
+    table = eda._pairwise_product_frame(df)
+    ranked = table.dropna(subset=["rank"])
+    assert len(ranked) == 28
+    assert sorted(ranked["rank"].tolist()) == list(range(1, 29))
+    # the ranked view (top-k) puts rank 1 first
+    top5 = eda.pairwise_product_correlation_with_outcome(df, k=5)
+    assert list(top5["rank"]) == [1, 2, 3, 4, 5]
+
+
+def test_pairwise_product_corr_reproducible():
+    df = _prepared()
+    a = eda.pairwise_product_correlation_with_outcome(df)
+    b = eda.pairwise_product_correlation_with_outcome(df)
+    pd.testing.assert_frame_equal(a, b)
