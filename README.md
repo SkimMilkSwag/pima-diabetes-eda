@@ -56,6 +56,7 @@ locally to preview that path.
 | Pearson correlation matrix (features + Outcome) | `correlation_matrix()` |
 | Top-k features by \|corr\| with Outcome | `top_correlates_with_outcome()` |
 | Per-feature signed corr with Outcome, ranked | `feature_correlation_with_outcome()` |
+| Pairwise product-vs-Outcome interaction screen (top-k pairs, top-2 flagged) | `pairwise_product_correlation_with_outcome()`, `flag_top_pairs()` |
 | LogisticRegression baseline (ROC-AUC, confusion matrix) | `train_baseline()` |
 | Bootstrap 95% CI on the ROC-AUC point estimate | `auc_bootstrap_ci()` |
 | Feature ablation: leave-one-feature-out AUC delta table | `feature_ablation()` |
